@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground — stylised Cupra Born fastback side profile.
+
+  Viewport is 108×108 dp with a 72×72 dp inner safe zone (insets of 18 on
+  each side), per the Android adaptive icon spec. The car is constrained to
+  roughly x:30..80 / y:37..77 so it stays fully visible under the circle,
+  rounded-square, and squircle launcher masks.
+
+  Wheels are drawn first so the body silhouette covers their top halves,
+  which is what a side-on car icon looks like in print.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Rear wheel -->
+    <path
+        android:fillColor="#1A2235"
+        android:pathData="M38,72 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0 Z" />
+    <!-- Front wheel -->
+    <path
+        android:fillColor="#1A2235"
+        android:pathData="M74,72 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0 Z" />
+
+    <!-- Wheel rims (lighter ring) -->
+    <path
+        android:fillColor="#3D4A66"
+        android:pathData="M38,72 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z" />
+    <path
+        android:fillColor="#3D4A66"
+        android:pathData="M74,72 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0 Z" />
+
+    <!-- Car body (fastback silhouette) — Cupra "Cobre" copper, the brand's
+         signature accent colour used across the Born exterior trim. -->
+    <path
+        android:fillColor="#B26F47"
+        android:pathData="M28,72 L28,62 L34,56 Q40,53 46,48 L50,42 Q56,37 64,37 Q72,38 76,46 L80,53 L82,62 L82,72 Z" />
+
+    <!-- Sheen highlight along the top to make the copper read as metallic
+         rather than flat brown on the home screen. -->
+    <path
+        android:fillColor="#D9956C"
+        android:fillAlpha="0.85"
+        android:pathData="M48,44 Q56,38 64,38 Q72,39 75,44 Q72,42 64,42 Q56,42 48,46 Z" />
+
+    <!-- Side window glass — darker tint to suggest cabin -->
+    <path
+        android:fillColor="#0A0E14"
+        android:fillAlpha="0.65"
+        android:pathData="M42,54 Q46,51 51,45 L54,42 Q58,40 64,40 Q70,41 73,46 L75,54 Z" />
+
+    <!-- Headlight accent -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M28,62 L31,62 L31,65 L28,65 Z" />
+
+    <!-- Tail-light accent -->
+    <path
+        android:fillColor="#FF4D4D"
+        android:pathData="M79,62 L82,62 L82,65 L79,65 Z" />
+</vector>

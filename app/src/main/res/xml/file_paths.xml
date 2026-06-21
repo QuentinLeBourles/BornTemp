@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Maps to Context.getExternalFilesDir(null) — accessible via USB at
+         /sdcard/Android/data/com.borntemp.app/files/Download/ and shareable
+         via the FileProvider authority com.borntemp.app.fileprovider. -->
+    <external-files-path name="captures" path="Download/" />
+</paths>

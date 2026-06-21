@@ -1,0 +1,42 @@
+# ── Gradle / build outputs ──────────────────────────────────────────────
+.gradle/
+build/
+**/build/
+out/
+release/
+*.apk
+*.aar
+*.aab
+*.ap_
+*.dex
+
+# ── Android Studio / IntelliJ ───────────────────────────────────────────
+*.iml
+.idea/
+!.idea/.gitignore
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ── Local machine-specific ──────────────────────────────────────────────
+# Contains the absolute path to the Android SDK on this machine.
+local.properties
+
+# ── Keystores (uncomment if you start signing release builds) ───────────
+# *.jks
+# *.keystore
+
+# ── Logs & runtime artifacts pulled from the device ─────────────────────
+session-pulls/
+*.log
+borntemp_*.csv
+
+# ── OS noise ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Per-developer tooling ───────────────────────────────────────────────
+.claude/
+
+# ── Java class files ────────────────────────────────────────────────────
+*.class

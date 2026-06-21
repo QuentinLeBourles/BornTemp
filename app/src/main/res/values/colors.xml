@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background fill for the adaptive launcher icon. Matches BornBg
+         (the app background) so the icon reads as part of the same dark
+         theme on the home screen. -->
+    <color name="ic_launcher_background">#0A0E14</color>
+</resources>
