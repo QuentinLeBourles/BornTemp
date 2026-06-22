@@ -176,6 +176,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     @SuppressLint("MissingPermission")
     fun connect(device: BluetoothDevice) {
+        // Ignore re-taps while a connect is already in flight. A second connect()
+        // calls obdManager.connect() → disconnect(), tearing down the half-built
+        // session mid-handshake — the cause of the "UDS 1003 ← NO DATA" failures.
+        val current = _uiState.value.connectionState
+        if (current == ConnectionState.CONNECTING || current == ConnectionState.INITIALIZING) {
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(
                 connectionState = ConnectionState.CONNECTING,
@@ -212,8 +219,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             log("Bluetooth connecté. Initialisation ELM327...", LogLevel.OK)
             _uiState.update { it.copy(connectionState = ConnectionState.INITIALIZING) }
 
-            val initResults = obdManager.initializeElm()
-            initResults.forEach { (cmd, resp) ->
+            // Log each init command as it completes (not batched after the whole
+            // sequence returns), so the UI shows live progress instead of a
+            // ~7s silent "INIT..." that tempts the user to re-tap CONNECTER.
+            obdManager.initializeElm { cmd, resp ->
                 capture.init(cmd, resp)
                 val trimmed = resp?.replace(">", "")?.trim() ?: "TIMEOUT"
                 val entry = LogEntry(
@@ -237,9 +246,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             _uiState.update { it.copy(logEntries = (it.logEntries + sessEntry).takeLast(50)) }
 
-            runDiagnosticProbe()
-
+            // Show the cockpit as soon as the session is up; the one-shot probe
+            // (~20 PIDs) then runs before polling starts, shaving several more
+            // seconds off perceived connect time.
             _uiState.update { it.copy(connectionState = ConnectionState.CONNECTED) }
+
+            runDiagnosticProbe()
 
             startPolling()
         }

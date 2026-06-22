@@ -61,6 +61,8 @@ fun CockpitScreen(
 ) {
     var showDeviceDialog by remember { mutableStateOf(false) }
     val connected = uiState.connectionState == ConnectionState.CONNECTED
+    val connecting = uiState.connectionState == ConnectionState.CONNECTING ||
+                     uiState.connectionState == ConnectionState.INITIALIZING
 
     Box(
         modifier = modifier
@@ -144,6 +146,7 @@ fun CockpitScreen(
             item {
                 ActionBar(
                     connected = connected,
+                    connecting = connecting,
                     onPrimary = {
                         if (connected) onDisconnect() else showDeviceDialog = true
                     },
@@ -932,13 +935,19 @@ private fun SettingsCollapsible(
 // ── Action bar ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun ActionBar(connected: Boolean, onPrimary: () -> Unit, onRefresh: () -> Unit) {
+private fun ActionBar(
+    connected: Boolean,
+    connecting: Boolean,
+    onPrimary: () -> Unit,
+    onRefresh: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         OutlinedButton(
             onClick = onPrimary,
+            enabled = !connecting,
             modifier = Modifier.weight(1f),
             shape = RoundedCornerShape(10.dp),
             border = BorderStroke(
@@ -951,7 +960,11 @@ private fun ActionBar(connected: Boolean, onPrimary: () -> Unit, onRefresh: () -
             contentPadding = PaddingValues(vertical = 10.dp)
         ) {
             Text(
-                if (connected) "DÉCONNECTER" else "CONNECTER",
+                when {
+                    connecting -> "CONNEXION..."
+                    connected  -> "DÉCONNECTER"
+                    else       -> "CONNECTER"
+                },
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
