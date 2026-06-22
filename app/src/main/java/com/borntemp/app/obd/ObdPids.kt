@@ -397,21 +397,25 @@ object ObdPids {
         return if (kwh in 10f..120f) kwh else null
     }
 
-    /** Lifetime energy from 1E32: returns (totalChargeKwh, totalDischargeKwh).
-     *  Bytes 0..3 = signed Big-Endian charge, 4..7 = ?, 8..11 = signed BE
-     *  discharge per the spot2000 CSV; the divisor 8583.07 yields kWh. */
+    /** Lifetime energy from 1E32 → (totalChargeKwh, totalDischargeKwh).
+     *  Per the spot2000 CSV (DID 1E32, B0 = first byte after the 62-1E-32 echo):
+     *    charge    = unsigned(B8..B11)  / 8583.07  kWh
+     *    discharge =   signed(B12..B15) / 8583.07  kWh   (negative = out of pack)
+     *  The discharge accumulator is a SIGNED two's-complement 32-bit int; parsing
+     *  it unsigned turned a real −6,924 kWh into a bogus +493,476 kWh on the UI. */
     fun parseLifetimeEnergy(response: String): Pair<Float?, Float?> {
         val hex = extractUdsDataHex(response) ?: return null to null
         if (hex.length < 32) return null to null
-        // The CSV documents the bytes at offsets 8 and 12 (1-based 9/13) —
-        // we parse both 4-byte chunks from there. If they come out wildly
-        // off-scale we return null so the UI degrades gracefully.
         val chargeRaw = hex.substring(16, 24).toLongOrNull(16) ?: return null to null
-        val dischRaw  = hex.substring(24, 32).toLongOrNull(16)
+        var dischRaw  = hex.substring(24, 32).toLongOrNull(16) ?: return null to null
+        if (dischRaw >= 0x8000_0000L) dischRaw -= 0x1_0000_0000L   // sign-extend
         val charge = chargeRaw / 8583.07f
-        val discharge = dischRaw?.let { it / 8583.07f }
-        val saneCharge = if (charge in 0f..1_000_000f) charge else null
-        val saneDisch  = discharge?.takeIf { it in 0f..1_000_000f }
+        val discharge = kotlin.math.abs(dischRaw / 8583.07f)       // magnitude for display
+        // Safety net: a passenger EV won't exceed a few hundred thousand kWh in
+        // its life. Reject off-scale values (e.g. a corrupt multiframe reassembly)
+        // so the UI degrades to "--" instead of showing garbage.
+        val saneCharge = charge.takeIf { it in 0f..500_000f }
+        val saneDisch  = discharge.takeIf { it in 0f..500_000f }
         return saneCharge to saneDisch
     }
 

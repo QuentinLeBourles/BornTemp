@@ -191,6 +191,24 @@ class ObdPidsTest {
         assertEquals(100.0f, ObdPids.parseSocBms(response)!!, delta)
     }
 
+    // ── Lifetime energy 1E32 (multi-frame, signed discharge) ────────────────
+
+    @Test
+    fun `parses lifetime charge and discharge from real multiframe with signed discharge`() {
+        // Real BMS capture (2026-06-21). Discharge (B12..B15 = FC7536A1) is a
+        // SIGNED accumulator: -59,427,167 / 8583.07 = -6,924 kWh. Parsed unsigned
+        // it became +493,476 kWh — the bug this guards against.
+        val response = "17FE007B1013621E3200A4DD\r" +
+                       "17FE007B2154FF5D10E203BA\r" +
+                       "17FE007B224203FC7536A1AA\r>"
+        val (charge, discharge) = ObdPids.parseLifetimeEnergy(response)
+        assertNotNull(charge)
+        assertNotNull(discharge)
+        assertEquals(7286.2f, charge!!, 1f)
+        assertEquals(6923.8f, discharge!!, 1f)   // magnitude, not 493_476
+        assertTrue("discharge must not exceed charge", discharge <= charge)
+    }
+
     // ── ECU switching commands ──────────────────────────────────────────────
 
     @Test
