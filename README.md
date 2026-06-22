@@ -35,18 +35,47 @@ Application Android native (Kotlin + Jetpack Compose) pour lire la température 
 
 ## Protocole OBD/UDS
 
-| Paramètre | PID (UDS) | Formule |
-|---|---|---|
-| Temp. moy. batterie | `22F1A3` | byte − 40 = °C |
-| 6 sondes thermiques | `2202F9` | 6 bytes, chacun − 40 = °C |
-| Liquide de refroid. entrée | `22027E` | byte − 40 = °C |
-| Liquide de refroid. sortie | `22027F` | byte − 40 = °C |
-| SOC | `22028C` | byte × 100 / 255 = % |
-| Tension HV | `22025F` | int16 × 0.1 = V |
-| État charge | `22023A` | 0=off, 1=AC, 2=DC |
+**Transport** : l'OBDLink CX est un adaptateur **BLE uniquement** (pas de SPP/RFCOMM
+Bluetooth Classic). Il expose un service GATT type UART :
 
-**Module BMS** : header CAN `7E4` (requête) / `7EC` (réponse)  
-**Protocole** : ISO 15765-4 CAN 11-bit 500kbps (ELM `ATSP6`)
+| GATT | UUID | Rôle |
+|---|---|---|
+| Service | `FFF0` | service UART custom |
+| Notify (RX) | `FFF1` | l'adaptateur pousse la sortie ELM327 en notifications |
+| Write (TX) | `FFF2` | écriture des commandes (write-with-response) |
+
+**Protocole CAN** : ISO 15765-4 CAN, **adressage étendu 29 bits**, 500 kbps
+(ELM `ATSP7` + `ATCP17`). Les réponses multi-trames sont réassemblées côté app.
+
+**Cibles ECU (en-têtes 29 bits)** :
+
+| Module | Requête | Réponse |
+|---|---|---|
+| BMS (batterie HV) | `17FC007B` | `17FE007B` |
+| EM (gestion énergie / 12V) | `17FC0010` | `17FE0010` |
+
+L'init configure le flow-control 29 bits (`ATFCSH` / `STCFCPA`) sur le BMS, et
+`sendCommand(cmd, ecu)` rebascule en-tête + filtre + flow-control au changement d'ECU.
+
+**PIDs lus (service UDS 0x22, défini dans `obd/ObdPids.kt`)** :
+
+| Paramètre | DID | ECU | Formule |
+|---|---|---|---|
+| Temp. pack max | `221E0E` | BMS | `(B0×256+B1) / 64` = °C |
+| Temp. pack min | `221E0F` | BMS | `(B0×256+B1) / 64` = °C |
+| SOC BMS (réel) | `22028C` | BMS | `raw / 2.5` = % |
+| Tension pack HV | `221E3B` | BMS | `(B0×256+B1) / 4` = V |
+| Courant pack HV | `221E3C` | BMS | 2 premiers octets BE **signés** `/ 5` = A (+ = charge/régén) |
+| Mode véhicule | `227448` | BMS | `0`=veille, `1`=roulage, `4`=charge AC, `6`=charge DC |
+| Pompe refroid. HV | `22743B` | BMS | 1 octet = % |
+| Temp. liquide refroid. | `22189D` | BMS | `WW XX YY ZZ` → sortie `(WW×256+XX)/64`, entrée `(YY×256+ZZ)/64` °C |
+| Énergie cumulée (vie) | `221E32` | BMS | charge `uint(B8..B11)/8583.07`, décharge `int(B12..B15)/8583.07` kWh |
+| MEC (capacité max) | `222AB2` | EM | 4 octets BE Wh `/ 1000` = kWh — **muet sur la Cupra Born (NO DATA)** |
+| EC (énergie courante) | `222AB8` | EM | idem MEC — **muet sur la Cupra Born (NO DATA)** |
+
+> Le SOC affiché (HMI) est dérivé du SOC BMS : `SOC_HMI = SOC_BMS × 51/46 − 6.4`.
+> MEC/EC sont sondés sur l'EM (`0x10`) puis en repli BMS/BREG/DCDC ; aucun module
+> n'a répondu sur cette voiture (relevé 2026-06-21), donc le SOH reste grisé.
 
 ---
 
@@ -67,13 +96,32 @@ Application Android native (Kotlin + Jetpack Compose) pour lire la température 
 ```
 app/src/main/java/com/borntemp/app/
 ├── MainActivity.kt          — Activité principale + permissions
-├── MainScreen.kt            — UI Compose (gauge, sondes, log)
+├── MainScreen.kt            — Routeur Compose (home / estimator / trend / errorDetail)
 ├── obd/
-│   ├── ObdPids.kt           — Constantes PID + parseurs
-│   └── BluetoothObdManager.kt — Connexion SPP + ELM327
+│   ├── ObdPids.kt           — Cibles ECU, séquence d'init, constantes PID + parseurs
+│   ├── BluetoothObdManager.kt — Connexion BLE/GATT + ELM327
+│   ├── ElmResponseAssembler.kt — Accumulation des trames jusqu'au prompt '>'
+│   └── SessionCapture.kt    — Journalisation CSV des réponses brutes
+├── screens/
+│   ├── CockpitScreen.kt     — Tableau de bord (gauge, sondes, intervalle de polling)
+│   ├── ChargeEstimatorScreen.kt — Planificateur de charge rapide DC
+│   ├── SohTrendScreen.kt    — Courbe historique du SOH (CSV)
+│   └── ErrorDetailScreen.kt — Détail erreur + log brut
+├── components/
+│   ├── CockpitHero.kt       — En-tête principal du cockpit
+│   ├── ChargeEstimatorChart.kt — Graphe de l'estimateur de charge
+│   └── CollapsibleCard.kt   — Carte repliable réutilisable
 ├── viewmodel/
-│   ├── BatteryModels.kt     — Modèles de données
-│   └── MainViewModel.kt     — Logique + polling
+│   ├── MainViewModel.kt     — Logique + polling
+│   ├── BatteryModels.kt     — Modèles de données + état UI (dont pollingIntervalMs)
+│   ├── BatterySettings.kt   — Préférences persistées (override type de pack…)
+│   ├── ChargeAnalytics.kt   — Fenêtres glissantes (puissance, pente SoC, dT/dt)
+│   ├── ChargeEstimator.kt   — Estimation du temps de charge restant
+│   └── SohHistory.kt        — Historique SOH persisté
+├── abrp/
+│   ├── AbrpTelemetryClient.kt — Envoi de télémétrie à A Better Routeplanner
+│   ├── AbrpSettings.kt      — Clés / configuration ABRP
+│   └── LocationProvider.kt  — Position GPS pour la télémétrie
 └── ui/theme/
     └── Theme.kt             — Thème sombre Cupra
 ```
@@ -83,8 +131,8 @@ app/src/main/java/com/borntemp/app/
 ## Notes
 
 - Les PIDs UDS de la plateforme MEB sont documentés par la communauté VCDS/OBDEleven. Ils peuvent varier légèrement selon le firmware BMS.
-- L'OBDLink CX utilise le profil **SPP (Bluetooth Classic)**, pas BLE.
-- Le polling est de 5 secondes. Tu peux le changer dans `MainViewModel.POLLING_INTERVAL_MS`.
+- L'OBDLink CX est un adaptateur **BLE uniquement** (service GATT `FFF0`), il n'expose pas de SPP/Bluetooth Classic.
+- Le polling est de **5 secondes par défaut**, ajustable (2–60 s) depuis l'écran cockpit ; la valeur vit dans `uiState.pollingIntervalMs` (`BatteryModels.kt`).
 - Sources communautaires : forums VWIDtalk, ID.3/Born subreddit, VCDS Ross-Tech wiki.
 
 ---
