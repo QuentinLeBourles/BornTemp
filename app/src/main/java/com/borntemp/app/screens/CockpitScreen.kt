@@ -22,9 +22,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.borntemp.app.BuildConfig
 import com.borntemp.app.components.BleChip
 import com.borntemp.app.components.CockpitHero
 import com.borntemp.app.components.CollapsibleCard
@@ -154,7 +156,18 @@ fun CockpitScreen(
                 )
             }
 
-            item { Spacer(Modifier.height(8.dp)) }
+            item {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "v${BuildConfig.VERSION_NAME}",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 8.5.sp,
+                    letterSpacing = 1.sp,
+                    color = BornMuted,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 

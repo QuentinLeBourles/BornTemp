@@ -1,7 +1,32 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
+
+// Hand-editable base; the git short SHA, a -dirty flag, and a build timestamp
+// are appended automatically so every build is uniquely identifiable both
+// in-app and via `adb shell dumpsys package com.borntemp.app | grep versionName`.
+val baseVersion = "1.0.0"
+
+fun git(vararg args: String): String? = try {
+    val out = providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true
+    }
+    if (out.result.get().exitValue == 0) out.standardOutput.asText.get().trim() else null
+} catch (_: Exception) { null }
+
+val gitSha = git("rev-parse", "--short", "HEAD")
+val gitDirty = (git("status", "--porcelain")?.isNotBlank()) ?: false
+val gitCount = git("rev-list", "--count", "HEAD")?.toIntOrNull()
+val buildStamp: String = SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date())
+val computedVersionName =
+    if (gitSha != null) "$baseVersion-$gitSha${if (gitDirty) "-dirty" else ""} ($buildStamp)"
+    else "$baseVersion-nogit ($buildStamp)"
+val computedVersionCode = gitCount ?: 1
 
 android {
     namespace = "com.borntemp.app"
@@ -11,8 +36,8 @@ android {
         applicationId = "com.borntemp.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = computedVersionCode
+        versionName = computedVersionName
     }
 
     buildTypes {
@@ -36,6 +61,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true   // exposes BuildConfig.VERSION_NAME for the in-app footer
     }
 
     composeOptions {
