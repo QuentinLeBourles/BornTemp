@@ -46,7 +46,10 @@ class BluetoothObdManager(private val context: Context) {
         // BLE transport overhead, so we don't bail before the adapter does.
         private const val RESPONSE_TIMEOUT_MS = 5000L
         private const val WRITE_TIMEOUT_MS = 2000L
-        private const val INIT_DELAY_MS = 300L
+        // Brief settle between init commands. These are local ELM AT commands
+        // (no CAN round-trip), so they need only a short pause — not 300ms,
+        // which alone added ~5s of dead time to every connect.
+        private const val INIT_DELAY_MS = 80L
 
         // Ask for the largest MTU; the CX negotiates down to 247 max.
         private const val REQUESTED_MTU = 512
@@ -336,11 +339,19 @@ class BluetoothObdManager(private val context: Context) {
 
     // ── ELM327 initialisation ───────────────────────────────────────────────
 
-    suspend fun initializeElm(): List<Pair<String, String?>> {
+    /**
+     * Run the ELM327 init sequence. [onProgress] is invoked after each command
+     * completes so the caller can surface live progress, instead of the UI
+     * sitting on a silent "INIT..." for the whole sequence.
+     */
+    suspend fun initializeElm(
+        onProgress: (suspend (cmd: String, resp: String?) -> Unit)? = null
+    ): List<Pair<String, String?>> {
         val results = mutableListOf<Pair<String, String?>>()
         for (cmd in ObdPids.INIT_SEQUENCE) {
             val resp = sendCommand(cmd)
             results.add(cmd to resp)
+            onProgress?.invoke(cmd, resp)
             delay(INIT_DELAY_MS)
         }
         currentHeader = ObdPids.HEADER_BMS
