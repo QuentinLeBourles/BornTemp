@@ -11,6 +11,7 @@ import com.borntemp.app.abrp.AbrpTelemetryClient
 import com.borntemp.app.abrp.LocationProvider
 import com.borntemp.app.obd.BluetoothObdManager
 import com.borntemp.app.obd.MonitoredDeviceStore
+import com.borntemp.app.obd.ObdBeaconReceiver
 import com.borntemp.app.obd.ObdPids
 import com.borntemp.app.obd.SessionCapture
 import kotlinx.coroutines.CoroutineScope
@@ -206,6 +207,7 @@ class ObdSessionController(private val application: Application) {
                 return@launch
             }
             monitoredDeviceStore.deviceAddress = device.address
+            ObdBeaconReceiver.armDetection(application)
 
             // Open the capture file now so init responses are recorded.
             val captureFile = capture.start(device.name)

@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         requestBluetoothPermissions()
+        com.borntemp.app.obd.ObdBeaconReceiver.armDetection(this)
 
         setContent {
             BornTempTheme {
