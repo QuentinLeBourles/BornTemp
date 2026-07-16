@@ -35,6 +35,7 @@ import com.borntemp.app.viewmodel.UiState
 fun MainScreen(
     uiState: UiState,
     pairedDevices: List<BluetoothDevice>,
+    autoConnectStatus: com.borntemp.app.viewmodel.AutoConnectStatus,
     onConnectDevice: (BluetoothDevice) -> Unit,
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
@@ -80,6 +81,7 @@ fun MainScreen(
         else -> CockpitScreen(
             uiState = uiState,
             pairedDevices = pairedDevices,
+            autoConnectStatus = autoConnectStatus,
             onConnectDevice = onConnectDevice,
             onDisconnect = onDisconnect,
             onRefresh = onRefresh,

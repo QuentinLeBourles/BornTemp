@@ -75,10 +75,12 @@ class MainActivity : ComponentActivity() {
             BornTempTheme {
                 val uiState by viewModel.uiState.collectAsState()
                 val pairedDevices = viewModel.getPairedDevices(this)
+                val autoConnectStatus = autoConnectStatus()
 
                 MainScreen(
                     uiState = uiState,
                     pairedDevices = pairedDevices,
+                    autoConnectStatus = autoConnectStatus,
                     onConnectDevice = { device ->
                         if (!hasBluetoothPermissions()) {
                             requestBluetoothPermissions()
@@ -117,6 +119,21 @@ class MainActivity : ComponentActivity() {
     }
 
     // ── Permission helpers ───────────────────────────────────────────────────
+
+    private fun autoConnectStatus(): com.borntemp.app.viewmodel.AutoConnectStatus {
+        val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) ==
+                PackageManager.PERMISSION_GRANTED
+        } else true
+        val monitoredAddress = com.borntemp.app.obd.MonitoredDeviceStore(this).deviceAddress
+        val adapter = viewModel.getBluetoothAdapter(this)
+        return when {
+            monitoredAddress == null -> com.borntemp.app.viewmodel.AutoConnectStatus.NO_DEVICE_SAVED
+            !hasScanPermission -> com.borntemp.app.viewmodel.AutoConnectStatus.NO_PERMISSION
+            adapter?.isEnabled != true -> com.borntemp.app.viewmodel.AutoConnectStatus.BLUETOOTH_OFF
+            else -> com.borntemp.app.viewmodel.AutoConnectStatus.ARMED
+        }
+    }
 
     private fun hasBluetoothPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

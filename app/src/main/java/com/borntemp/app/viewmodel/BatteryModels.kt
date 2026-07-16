@@ -139,6 +139,13 @@ enum class ConnectionState {
     ERROR
 }
 
+enum class AutoConnectStatus {
+    ARMED,
+    NO_DEVICE_SAVED,
+    NO_PERMISSION,
+    BLUETOOTH_OFF
+}
+
 data class UiState(
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val batteryData: BatteryData = BatteryData(),

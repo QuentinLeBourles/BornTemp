@@ -48,6 +48,7 @@ import java.util.Locale
 fun CockpitScreen(
     uiState: UiState,
     pairedDevices: List<BluetoothDevice>,
+    autoConnectStatus: com.borntemp.app.viewmodel.AutoConnectStatus,
     onConnectDevice: (BluetoothDevice) -> Unit,
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
@@ -65,6 +66,17 @@ fun CockpitScreen(
     val connected = uiState.connectionState == ConnectionState.CONNECTED
     val connecting = uiState.connectionState == ConnectionState.CONNECTING ||
                      uiState.connectionState == ConnectionState.INITIALIZING
+    val autoConnectBanner = when (autoConnectStatus) {
+        com.borntemp.app.viewmodel.AutoConnectStatus.ARMED -> null
+        com.borntemp.app.viewmodel.AutoConnectStatus.NO_DEVICE_SAVED ->
+            if (uiState.connectionState == ConnectionState.DISCONNECTED)
+                "Connectez-vous une fois manuellement pour activer la connexion automatique."
+            else null
+        com.borntemp.app.viewmodel.AutoConnectStatus.NO_PERMISSION ->
+            "Connexion automatique désactivée — permission Bluetooth manquante."
+        com.borntemp.app.viewmodel.AutoConnectStatus.BLUETOOTH_OFF ->
+            "Connexion automatique désactivée — Bluetooth éteint."
+    }
 
     Box(
         modifier = modifier
@@ -76,6 +88,21 @@ fun CockpitScreen(
             contentPadding = PaddingValues(horizontal = 22.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            autoConnectBanner?.let { message ->
+                item {
+                    androidx.compose.material3.Surface(
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                    ) {
+                        androidx.compose.material3.Text(
+                            text = message,
+                            modifier = androidx.compose.ui.Modifier.padding(12.dp),
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
             item {
                 CockpitHeader(
                     connectionState = uiState.connectionState,
