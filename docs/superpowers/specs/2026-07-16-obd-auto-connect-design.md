@@ -41,6 +41,35 @@ whole investigation).
   format — this design only changes *when/how* the existing session logic
   starts and runs.
 
+## Forward compatibility: shared foundation for future OBD-triggered features
+
+A separate, not-yet-brainstormed feature is planned (see `PLAN_1_borntemp_charge_logging.md`,
+2026-07-16): logging charge-session telemetry (SOC/temp/power samples,
+Room-backed, exported as CSV for an external forecasting pipeline). That
+plan's current draft calls for its own foreground Service and car-detection
+to know when a charge session starts — but that's the same job
+`ObdForegroundService`/`ObdBeaconReceiver` already do here. The OBDLink CX
+is powered off the OBD2 port whenever the car's low-voltage systems are
+awake, which is true both while driving and while charging (the BMS has to
+be awake to manage the charge), so our existing BLE-advertisement trigger
+already fires for both cases without any change.
+
+**Constraint for that future work:** charge-session logging must be built as
+another consumer of the existing `ObdSessionController`'s poll loop/`uiState`
+— the same way the ABRP push already just piggybacks on `readAllData()` —
+not as a second independent Service. Two services both willing to hold the
+BLE connection is exactly the bug class this whole design exists to rule
+out; it doesn't stop mattering just because the second service would be
+ours instead of ABRP's.
+
+One more thing worth flagging for whoever writes that plan: its draft
+proposes detecting charge start/end via a SOC-rising heuristic. That's
+unnecessary — `readAllData()` already reads vehicle mode straight from UDS
+PID `227448` (`ObdPids.parseVehicleMode` → `ChargeState.AC_CHARGING` /
+`DC_CHARGING` / `NOT_CHARGING`), which is an authoritative signal, not an
+inference. This design doesn't change that parsing (see Non-goals) — it's
+just worth not reinventing next to it.
+
 ## Detection: what counts as "the car is here"
 
 The OBDLink CX only advertises over BLE when it has power from the OBD2
