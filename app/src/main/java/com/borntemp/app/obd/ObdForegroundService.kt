@@ -62,8 +62,13 @@ class ObdForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (sessionJob?.isActive == true) {
+            // Already running a session for this device — ignore the duplicate start
+            // instead of cancelling and relaunching, which would needlessly disrupt
+            // an already-connected or in-progress connection.
+            return START_NOT_STICKY
+        }
         startForegroundWithNotification(buildProgressNotification("Connexion..."))
-        sessionJob?.cancel()
         sessionJob = serviceScope.launch { runSession(address) }
         return START_NOT_STICKY
     }
@@ -81,10 +86,16 @@ class ObdForegroundService : Service() {
         val connected = retryPolicy.run(
             onState = { state ->
                 when (state) {
-                    is ConnectRetryPolicy.State.Attempting ->
+                    is ConnectRetryPolicy.State.Attempting -> {
+                        if (state.attempt == 1) {
+                            // Clear any stale failure notification from a previous
+                            // failed cycle before this new attempt starts.
+                            NotificationManagerCompat.from(this).cancel(FAILURE_NOTIFICATION_ID)
+                        }
                         updateNotification(buildProgressNotification(
                             "Connexion... (tentative ${state.attempt}/${state.maxAttempts})"
                         ))
+                    }
                     ConnectRetryPolicy.State.Succeeded -> { /* live notification takes over below */ }
                     ConnectRetryPolicy.State.GaveUp -> postFailureNotification()
                 }
@@ -117,6 +128,7 @@ class ObdForegroundService : Service() {
 
     private fun finishAndReArm() {
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
+        NotificationManagerCompat.from(this).cancel(FAILURE_NOTIFICATION_ID)
         ObdBeaconReceiver.armDetection(applicationContext)
         stopSelf()
     }
