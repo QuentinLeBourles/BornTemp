@@ -69,16 +69,24 @@ class AbrpTelemetryClient {
         val json = JSONObject()
         json.put("utc", System.currentTimeMillis() / 1000L)
         data.soc?.let { json.put("soc", it.toDouble()) }
-        data.powerKw?.let { json.put("power", it.toDouble()) }
+        // ABRP convention: output (discharging) is positive, input (charging) is negative.
+        // BornTemp's own convention is the opposite (+ = charge/regen), so both are negated here.
+        data.powerKw?.let { json.put("power", (-it).toDouble()) }
         data.voltage?.let { json.put("voltage", it.toDouble()) }
-        data.current?.let { json.put("current", it.toDouble()) }
+        data.current?.let { json.put("current", (-it).toDouble()) }
         data.avgTemp?.let { json.put("batt_temp", it.toDouble()) }
         val isCharging = data.chargeState == ChargeState.AC_CHARGING ||
                          data.chargeState == ChargeState.DC_CHARGING
         json.put("is_charging", if (isCharging) 1 else 0)
         json.put("is_dcfc", if (data.chargeState == ChargeState.DC_CHARGING) 1 else 0)
-        val speedKph = loc?.speedKph ?: 0f
-        json.put("is_parked", if (!isCharging && speedKph < 1f) 1 else 0)
+        if (isCharging) {
+            json.put("is_parked", 0)
+        } else {
+            // Only assert parked/not-parked when we have a real speed reading — without a
+            // GPS fix there's no basis to claim either, so the field is omitted rather than
+            // defaulting to "parked" (which previously happened whenever loc was null).
+            loc?.speedKph?.let { speed -> json.put("is_parked", if (speed < 1f) 1 else 0) }
+        }
         loc?.let {
             json.put("lat", it.lat)
             json.put("lon", it.lon)
