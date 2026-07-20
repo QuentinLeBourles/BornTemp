@@ -10,6 +10,7 @@ import com.borntemp.app.abrp.AbrpSettings
 import com.borntemp.app.abrp.AbrpTelemetryClient
 import com.borntemp.app.abrp.LocationProvider
 import com.borntemp.app.obd.BluetoothObdManager
+import com.borntemp.app.obd.ChargeSessionLogger
 import com.borntemp.app.obd.MonitoredDeviceStore
 import com.borntemp.app.obd.ObdBeaconReceiver
 import com.borntemp.app.obd.ObdPids
@@ -34,6 +35,9 @@ class ObdSessionController(private val application: Application) {
 
     private val obdManager = BluetoothObdManager(application)
     private val capture = SessionCapture(application)
+    private val sessionLogger = ChargeSessionLogger(
+        application.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+    )
     private val analytics = ChargeAnalytics()
     private var pollingJob: Job? = null
     private var pollCounter = 0L
@@ -339,6 +343,7 @@ class ObdSessionController(private val application: Application) {
         )}
         log("Déconnecté.", LogLevel.INFO)
         capture.close()
+        sessionLogger.endConnection()
     }
 
     // ── Polling ──────────────────────────────────────────────────────────────
@@ -578,6 +583,16 @@ class ObdSessionController(private val application: Application) {
                 current = effectiveCurrent,
                 mode = vehicleMode,
             )
+        )
+
+        sessionLogger.recordSample(
+            timestampMs = now,
+            socPercent = socDisplay,
+            batteryTempC = finalAvg,
+            chargePowerKw = effectivePower,
+            chargeCurrentA = effectiveCurrent,
+            chargeVoltageV = voltage,
+            chargeState = chargeState,
         )
 
         val avgPowerKw = analytics.avgPowerKw()
