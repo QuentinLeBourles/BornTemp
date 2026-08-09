@@ -189,4 +189,64 @@ class ChargeAnalyticsTest {
         )
         assertEquals(ThermalAdvice.OPTIMAL, tr.advice)
     }
+
+    // ── Capacity fallbacks ──────────────────────────────────────────────
+    // MEC (222AB2) is mute on this car. These lock in that a missing MEC no
+    // longer nulls out every capacity-derived feature at once.
+
+    @Test
+    fun `etaMinutesTo still answers on a fallback capacity when MEC is absent`() {
+        val a = ChargeAnalytics()
+        a.push(sample(0L, 40f, 50f))
+        a.push(sample(30_000L, 41f, 50f))
+        // 77 kWh here is the reference pack size, not a MEC reading.
+        val eta = a.etaMinutesTo(80f, 40f, 77f, ChargeState.DC_CHARGING)
+        assertNotNull(eta)
+        assertTrue("ETA should be a finite positive duration", eta!! > 0f)
+    }
+
+    @Test
+    fun `etaMinutesTo returns null when no capacity at all is known`() {
+        val a = ChargeAnalytics()
+        a.push(sample(0L, 40f, 50f))
+        a.push(sample(30_000L, 41f, 50f))
+        assertNull(a.etaMinutesTo(80f, 40f, null, ChargeState.DC_CHARGING))
+    }
+
+    @Test
+    fun `referenceCapacityKwh falls back to the estimator default when the pack is unknown`() {
+        assertEquals(77f, referenceCapacityKwh(PackType.LG_2021_22), delta)
+        assertEquals(79.9f, referenceCapacityKwh(PackType.SK_2023), delta)
+        // The regression that mattered: UNKNOWN used to yield null downstream.
+        assertEquals(
+            ChargeEstimator.DEFAULT_PACK_KWH,
+            referenceCapacityKwh(PackType.UNKNOWN),
+            delta
+        )
+    }
+
+    @Test
+    fun `classifyCapacityProvenance grades MEC, integrator and nothing differently`() {
+        // Real MEC in ideal conditions — the pre-existing grading still applies.
+        val (fromMec, _) = classifyCapacityProvenance(
+            mecKwh = 74f, integratedKwh = null, tempAvg = 22f, socBms = 95f,
+            mode = ObdPids.VehicleMode.STANDBY
+        )
+        assertEquals(SohConfidence.RELIABLE, fromMec)
+
+        // No MEC but a measured mid-range pass — usable, never "reliable".
+        val (fromIntegrator, reason) = classifyCapacityProvenance(
+            mecKwh = null, integratedKwh = 76.8f, tempAvg = 22f, socBms = 95f,
+            mode = ObdPids.VehicleMode.STANDBY
+        )
+        assertEquals(SohConfidence.INDICATIVE, fromIntegrator)
+        assertNotNull(reason)
+
+        // Neither — stay honest rather than invent a number.
+        val (nothing, _) = classifyCapacityProvenance(
+            mecKwh = null, integratedKwh = null, tempAvg = 22f, socBms = 95f,
+            mode = ObdPids.VehicleMode.STANDBY
+        )
+        assertEquals(SohConfidence.UNAVAILABLE, nothing)
+    }
 }

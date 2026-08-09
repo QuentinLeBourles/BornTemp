@@ -28,8 +28,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.borntemp.app.BuildConfig
 import com.borntemp.app.components.BleChip
+import com.borntemp.app.components.ChargeProjectionCard
 import com.borntemp.app.components.CockpitHero
 import com.borntemp.app.components.CollapsibleCard
+import com.borntemp.app.components.LivePowerChip
 import com.borntemp.app.ui.theme.*
 import com.borntemp.app.viewmodel.*
 import java.text.SimpleDateFormat
@@ -124,6 +126,21 @@ fun CockpitScreen(
                     sohPct = uiState.batteryData.sohPct,
                     volt12v = uiState.batteryData.volt12v
                 )
+            }
+
+            // What's happening right now comes before the planner, which is
+            // only a what-if estimator.
+            item {
+                LivePowerChip(
+                    chargeState = uiState.batteryData.chargeState,
+                    powerKw = uiState.batteryData.powerKw,
+                    current = uiState.batteryData.current,
+                    voltage = uiState.batteryData.voltage
+                )
+            }
+
+            item {
+                ChargeProjectionCard(projection = uiState.chargeProjection)
             }
 
             item {

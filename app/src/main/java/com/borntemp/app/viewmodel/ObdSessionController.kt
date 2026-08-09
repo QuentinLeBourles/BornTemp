@@ -38,6 +38,9 @@ class ObdSessionController(private val application: Application) {
     private var pollingJob: Job? = null
     private var pollCounter = 0L
     private var lastSohSampleMs = 0L
+    /** Last unmapped 7448 frame already traced, so the diagnostic fires once
+     *  per distinct value instead of on every poll. */
+    private var lastUnknownModeRaw: String? = null
 
     private val abrpSettings = AbrpSettings(application)
     private val abrpClient = AbrpTelemetryClient()
@@ -95,6 +98,49 @@ class ObdSessionController(private val application: Application) {
         val resp = obdManager.sendCommand(pid, ecu)
         recordQuery("${ecu.name}:$pid", resp)
         return resp
+    }
+
+    /**
+     * Read one of the cell-index DIDs (1E33 / 1E34) and say *why* it failed
+     * when it does. Cell voltages reach the UI through three links — index
+     * DID answers, index decodes into 1..108, pointed-to cell reads back a
+     * sane voltage — and a silent null anywhere left the card showing "--"
+     * with no way to tell which link broke. The raw frames are in the .log
+     * either way; these events add the interpretation.
+     */
+    private suspend fun readCellIndex(pid: String, label: String): Int? {
+        val raw = queryOn(pid, ObdPids.ECU_BMS)
+        if (raw == null) {
+            capture.event("CELL_IDX $label ($pid) — aucune réponse")
+            return null
+        }
+        val idx = ObdPids.parseCellVoltIndex(raw)
+        if (idx == null) {
+            capture.event("CELL_IDX $label ($pid) — trame non décodée: ${raw.trim()}")
+            return null
+        }
+        if (idx !in 1..108) {
+            capture.event("CELL_IDX $label ($pid) — index hors 1..108: $idx")
+            return null
+        }
+        return idx
+    }
+
+    /** Read the voltage of the cell an index DID pointed at, tracing a missing
+     *  or out-of-range reply. See [readCellIndex]. */
+    private suspend fun readCellVoltMv(idx: Int, label: String): Int? {
+        val pid = ObdPids.cellVoltPid(idx)
+        val raw = queryOn(pid, ObdPids.ECU_BMS)
+        if (raw == null) {
+            capture.event("CELL_V $label — cellule $idx ($pid) sans réponse")
+            return null
+        }
+        val mv = ObdPids.parseCellVoltMv(raw)
+        if (mv == null) {
+            capture.event("CELL_V $label — cellule $idx ($pid) hors 2–5 V: ${raw.trim()}")
+            return null
+        }
+        return mv
     }
 
     /**
@@ -403,8 +449,18 @@ class ObdSessionController(private val application: Application) {
             ?.let { ObdPids.parsePackCurrent(it)?.let { raw -> -raw } }
 
         // ── Vehicle mode + pump (fast — affects state + thermal) ────────
-        val vehicleMode = queryOn(ObdPids.PID_VEHICLE_MODE, ObdPids.ECU_BMS)
+        val vehicleModeRaw = queryOn(ObdPids.PID_VEHICLE_MODE, ObdPids.ECU_BMS)
+        val vehicleMode = vehicleModeRaw
             ?.let { ObdPids.parseVehicleMode(it) } ?: previous.vehicleMode
+        // parseVehicleMode only maps 0/1/4/6 and never returns null, so a code
+        // we don't know overwrites the previous state with UNKNOWN and hides an
+        // active charge. Trace the frame rather than guess a mapping — once per
+        // distinct raw value, so a persistent unknown doesn't flood the log.
+        if (vehicleMode == ObdPids.VehicleMode.UNKNOWN && vehicleModeRaw != null &&
+            vehicleModeRaw != lastUnknownModeRaw) {
+            lastUnknownModeRaw = vehicleModeRaw
+            capture.event("VEHICLE_MODE non mappé (7448) — trame: ${vehicleModeRaw.trim()}")
+        }
         val pumpPct = queryOn(ObdPids.PID_COOLANT_PUMP, ObdPids.ECU_BMS)
             ?.let { ObdPids.parseCoolantPump(it) } ?: previous.coolantPumpPct
 
@@ -427,22 +483,14 @@ class ObdSessionController(private val application: Application) {
                 val (ci, co) = ObdPids.parseCoolantTemps(it)
                 coolantIn = ci; coolantOut = co
             }
-            queryOn(ObdPids.PID_CELL_VOLT_MIN_IDX, ObdPids.ECU_BMS)
-                ?.let { ObdPids.parseCellVoltIndex(it) }?.let { cellMinIdx = it }
-            queryOn(ObdPids.PID_CELL_VOLT_MAX_IDX, ObdPids.ECU_BMS)
-                ?.let { ObdPids.parseCellVoltIndex(it) }?.let { cellMaxIdx = it }
+            readCellIndex(ObdPids.PID_CELL_VOLT_MIN_IDX, "min")?.let { cellMinIdx = it }
+            readCellIndex(ObdPids.PID_CELL_VOLT_MAX_IDX, "max")?.let { cellMaxIdx = it }
 
             // Resolve the actual min/max cell voltages by reading the two
             // pointed-to cells (1E40 + (idx-1)). Two extra PIDs per slow tick
             // instead of iterating all 108 — keeps the loop snappy.
-            cellMinIdx?.takeIf { it in 1..108 }?.let { idx ->
-                queryOn(ObdPids.cellVoltPid(idx), ObdPids.ECU_BMS)
-                    ?.let { ObdPids.parseCellVoltMv(it) }?.let { cellMinMv = it }
-            }
-            cellMaxIdx?.takeIf { it in 1..108 }?.let { idx ->
-                queryOn(ObdPids.cellVoltPid(idx), ObdPids.ECU_BMS)
-                    ?.let { ObdPids.parseCellVoltMv(it) }?.let { cellMaxMv = it }
-            }
+            cellMinIdx?.let { idx -> readCellVoltMv(idx, "min")?.let { cellMinMv = it } }
+            cellMaxIdx?.let { idx -> readCellVoltMv(idx, "max")?.let { cellMaxMv = it } }
 
             // MEC / EC / 12V — try the EM module first (CSV-documented host),
             // fall back to the BMS itself if EM is silent. The 2026-06-21
@@ -494,19 +542,46 @@ class ObdSessionController(private val application: Application) {
             effectivePower = null
         }
 
-        // Pack ID + SOH + buffer breakdown. Snapshot the (var) mecKwh into
-        // an immutable local so Kotlin can smart-cast after the null check.
+        // ── Handoff 2 analytics: feed the rolling window first, so everything
+        // derived below (integrated capacity, ETA, slopes) sees this tick ────
+        analytics.push(
+            ChargeAnalytics.Sample(
+                t = now,
+                socHmi = socDisplay,
+                socBms = socBms,
+                tempAvg = finalAvg,
+                powerKw = effectivePower,
+                voltage = voltage,
+                current = effectiveCurrent,
+                mode = vehicleMode,
+            )
+        )
+
+        // Pack ID + SOH + buffer breakdown.
+        //
+        // MEC (222AB2) is mute on this Born, and everything capacity-derived
+        // used to hang off that single DID: SOH, buffers, confidence, the
+        // charge ETA and the CSV history all collapsed to null together. Two
+        // fallbacks break that chain:
+        //   reference capacity — user override, else the MEC guess, else the
+        //     77 kWh default the charge estimator already assumes;
+        //   measured capacity  — the integrator's mid-range charge pass, the
+        //     only real capacity measurement available on this car.
         // User override takes precedence over the auto-heuristic; AUTO falls
         // back to the MEC-based guess.
         val overrideChoice = _uiState.value.packTypeOverride
         val packType = overrideChoice.packType ?: guessPackType(mecKwh)
-        val capacityOrig = packType.capacityKwh
-        val mecSnapshot = mecKwh
-        val sohPct = if (mecSnapshot != null && capacityOrig != null)
-            (mecSnapshot / capacityOrig * 100f).coerceIn(0f, 110f) else null
-        val bufferBottom = mecSnapshot?.let { BatteryBuffers.bottomReserveKwh(it) }
-        val bufferTop    = mecSnapshot?.let { BatteryBuffers.topReserveKwh(it) }
-        val usable       = mecSnapshot?.let { BatteryBuffers.usableKwh(it) }
+        val capacityOrig = referenceCapacityKwh(packType)
+        val integratedKwh = analytics.energyIntegrator().lastResult()?.apparentCapacityKwh
+        // Real MEC wins the day it answers; until then the integrated capacity
+        // is the only honest numerator we have for SOH.
+        val effectiveCapacity = mecKwh ?: integratedKwh
+        val sohPct = effectiveCapacity?.let {
+            (it / capacityOrig * 100f).coerceIn(0f, 110f)
+        }
+        val bufferBottom = effectiveCapacity?.let { BatteryBuffers.bottomReserveKwh(it) }
+        val bufferTop    = effectiveCapacity?.let { BatteryBuffers.topReserveKwh(it) }
+        val usable       = effectiveCapacity?.let { BatteryBuffers.usableKwh(it) }
 
         // §7 bug #2 — charge state from vehicle mode, not power sign.
         val chargeState = when (vehicleMode) {
@@ -517,8 +592,10 @@ class ObdSessionController(private val application: Application) {
             ObdPids.VehicleMode.UNKNOWN     -> ChargeState.UNKNOWN
         }
 
-        val (confidence, confReason) = classifySohConfidence(
+        // Confidence follows the provenance of the number we actually showed.
+        val (confidence, confReason) = classifyCapacityProvenance(
             mecKwh = mecKwh,
+            integratedKwh = integratedKwh,
             tempAvg = finalAvg,
             socBms = socBms,
             mode = vehicleMode
@@ -565,21 +642,6 @@ class ObdSessionController(private val application: Application) {
             timestamp = now
         )
 
-        // ── Handoff 2 analytics: feed the rolling window then derive
-        // the ETA + thermal-trajectory snapshots used by the UI ──────────
-        analytics.push(
-            ChargeAnalytics.Sample(
-                t = now,
-                socHmi = socDisplay,
-                socBms = socBms,
-                tempAvg = finalAvg,
-                powerKw = effectivePower,
-                voltage = voltage,
-                current = effectiveCurrent,
-                mode = vehicleMode,
-            )
-        )
-
         val avgPowerKw = analytics.avgPowerKw()
         val socSlope = analytics.socSlopePctPerMin()
         val tempSlope = analytics.tempSlopeCPerMin()
@@ -589,9 +651,13 @@ class ObdSessionController(private val application: Application) {
             visible = isCharging,
             avgPowerKw = avgPowerKw,
             socSlopePctPerMin = socSlope,
-            etaMinutesTo80 = analytics.etaMinutesTo(80f, socDisplay, mecKwh, chargeState),
-            etaMinutesTo100 = analytics.etaMinutesTo(100f, socDisplay, mecKwh, chargeState),
-            apparentCapacityKwh = analytics.energyIntegrator().lastResult()?.apparentCapacityKwh,
+            // The reference capacity is a fine ETA denominator even before any
+            // measurement lands — it only scales the remaining-energy estimate.
+            etaMinutesTo80 = analytics.etaMinutesTo(
+                80f, socDisplay, effectiveCapacity ?: capacityOrig, chargeState),
+            etaMinutesTo100 = analytics.etaMinutesTo(
+                100f, socDisplay, effectiveCapacity ?: capacityOrig, chargeState),
+            apparentCapacityKwh = integratedKwh,
         )
         val trajectory = classifyThermalTrajectory(
             tempAvg = finalAvg,
@@ -635,8 +701,13 @@ class ObdSessionController(private val application: Application) {
             log("Relevé : aucune donnée température reçue.", LogLevel.WARN)
         }
 
-        // CSV history — append at most every 30 s, only when we have an MEC.
-        if (mecKwh != null && now - lastSohSampleMs >= SOH_CSV_MIN_INTERVAL_MS) {
+        // CSV history — append at most every 30 s. This used to require an MEC
+        // reading, which this car never returns, so the file only ever held its
+        // header. The empty cells sohSample() writes for null floats keep it
+        // spreadsheet-friendly, so we log whatever the BMS did answer and skip
+        // only rows that would carry no measurement at all.
+        val hasAnyMeasurement = finalAvg != null || socBms != null
+        if (hasAnyMeasurement && now - lastSohSampleMs >= SOH_CSV_MIN_INTERVAL_MS) {
             capture.sohSample(
                 timestampMs = now,
                 mecKwh = mecKwh,

@@ -130,6 +130,37 @@ fun guessPackType(mecKwh: Float?): PackType {
     return if (mecKwh >= 78f) PackType.SK_2023 else PackType.LG_2021_22
 }
 
+/**
+ * Reference capacity (kWh) that SOH and the charge ETA are scaled against.
+ *
+ * MEC is mute on this Born, so [guessPackType] answers UNKNOWN and its
+ * [PackType.capacityKwh] is null — which used to null out SOH, the buffers and
+ * every ETA at once. Falling back to the pack size the charge estimator already
+ * assumes keeps those alive; the number only scales results, it is never shown
+ * as a measurement.
+ */
+fun referenceCapacityKwh(packType: PackType): Float =
+    packType.capacityKwh ?: ChargeEstimator.DEFAULT_PACK_KWH
+
+/**
+ * Confidence for a SOH figure, tagged by where its capacity came from: a real
+ * MEC reading (graded by [classifySohConfidence]), else the charge integrator's
+ * measured mid-range pass, else nothing to report.
+ */
+fun classifyCapacityProvenance(
+    mecKwh: Float?,
+    integratedKwh: Float?,
+    tempAvg: Float?,
+    socBms: Float?,
+    mode: ObdPids.VehicleMode
+): Pair<SohConfidence, String?> = when {
+    mecKwh != null -> classifySohConfidence(mecKwh, tempAvg, socBms, mode)
+    integratedKwh != null ->
+        SohConfidence.INDICATIVE to "capacité intégrée sur une passe 30–70 % de SOC"
+    else ->
+        SohConfidence.UNAVAILABLE to "MEC absent, aucune passe de charge 30–70 %"
+}
+
 enum class ConnectionState {
     DISCONNECTED,
     SCANNING,

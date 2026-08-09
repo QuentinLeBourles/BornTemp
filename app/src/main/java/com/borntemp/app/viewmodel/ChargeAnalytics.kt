@@ -74,20 +74,23 @@ class ChargeAnalytics(
 
     /**
      * Heuristic ETA (minutes) from the current SoC to [targetSocPct].
-     * Uses MEC-derived capacity and a smoothed power. Returns null if any
-     * input is missing, the gap is non-positive, or the car isn't actively
-     * charging.
+     * Uses a smoothed power and [capacityKwh] — the pack capacity the caller
+     * considers current. That used to be the MEC reading, but MEC is silent on
+     * this Born, which pinned every ETA to null; the caller now resolves a
+     * fallback chain (see ObdSessionController.effectiveCapacityKwh). Returns
+     * null if any input is missing, the gap is non-positive, or the car isn't
+     * actively charging.
      */
     fun etaMinutesTo(
         targetSocPct: Float,
         socNowPct: Float?,
-        mecKwh: Float?,
+        capacityKwh: Float?,
         chargeState: ChargeState,
         windowMs: Long = 60_000L,
     ): Float? {
         if (chargeState != ChargeState.AC_CHARGING &&
             chargeState != ChargeState.DC_CHARGING) return null
-        if (socNowPct == null || mecKwh == null) return null
+        if (socNowPct == null || capacityKwh == null) return null
         val avgP = avgPowerKw(windowMs) ?: return null
         if (avgP <= 1f) return null
         val gapPct = targetSocPct - socNowPct
@@ -95,7 +98,7 @@ class ChargeAnalytics(
         // Charging power is reported with the handoff sign convention
         // (+ = charge); we still abs() so a momentary regen sample in
         // the window doesn't flip the ETA sign.
-        return gapPct / 100f * mecKwh / abs(avgP) * 60f
+        return gapPct / 100f * capacityKwh / abs(avgP) * 60f
     }
 
     fun energyIntegrator(): ChargeEnergyIntegrator = integrator
