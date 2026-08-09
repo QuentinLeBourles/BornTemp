@@ -75,7 +75,20 @@ L'init configure le flow-control 29 bits (`ATFCSH` / `STCFCPA`) sur le BMS, et
 
 > Le SOC affiché (HMI) est dérivé du SOC BMS : `SOC_HMI = SOC_BMS × 51/46 − 6.4`.
 > MEC/EC sont sondés sur l'EM (`0x10`) puis en repli BMS/BREG/DCDC ; aucun module
-> n'a répondu sur cette voiture (relevé 2026-06-21), donc le SOH reste grisé.
+> n'a répondu sur cette voiture (relevé 2026-06-21).
+>
+> Ce MEC absent servait de dénominateur unique à tout le pipeline capacité : SOH,
+> tampons, confiance, ETA de charge et historique CSV tombaient ensemble. Deux
+> replis sont désormais en place (`referenceCapacityKwh` / `classifyCapacityProvenance`
+> dans `BatteryModels.kt`) :
+>
+> - **capacité de référence** — override utilisateur, sinon la déduction MEC, sinon
+>   les 77 kWh que l'estimateur de charge suppose déjà. Sert d'échelle (SOH %, ETA),
+>   jamais de mesure.
+> - **capacité mesurée** — `apparentCapacityKwh` de `ChargeEnergyIntegrator`, intégré
+>   sur une passe de charge 30→70 % de SOC. C'est la seule vraie mesure disponible
+>   sur cette voiture ; le SOH la reporte en confiance **INDICATIF**, et reste à `--`
+>   tant qu'aucune charge qualifiante n'a eu lieu.
 
 ---
 
