@@ -1,0 +1,54 @@
+name: Build APK
+
+# Builds an installable debug APK on every push and publishes it as an
+# artifact, so the app can be tested from a phone without a local Android
+# Studio. Also runs the unit tests, which is the only place in this project
+# where the Compose sources actually get compiled.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # app/build.gradle.kts derives versionCode from `git rev-list --count`
+          # and versionName from the short SHA — a shallow clone would pin every
+          # build to versionCode 1.
+          fetch-depth: 0
+
+      # AGP 8.3 requires JDK 17, even though the app itself targets 1.8.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      - name: Unit tests
+        run: ./gradlew test --no-daemon
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Publish APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: borntemp-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      # Kept separate from the APK so a red test run is still downloadable and
+      # readable — the reports say which case failed, the APK never does.
+      - name: Publish test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
