@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.borntemp.app.ui.theme.*
+import com.borntemp.app.viewmodel.ConnectionState
 import kotlin.math.abs
 
 /**
@@ -35,8 +36,6 @@ import kotlin.math.abs
 @Composable
 fun CockpitHero(
     tempAvg: Float?,
-    tempMin: Float?,
-    tempMax: Float?,
     tempSlopeCPerMin: Float?,
     socHmi: Float?,
     sohPct: Float?,
@@ -48,12 +47,7 @@ fun CockpitHero(
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        TempRing(
-            tempAvg = tempAvg,
-            tempMin = tempMin,
-            tempMax = tempMax,
-            slope = tempSlopeCPerMin
-        )
+        TempRing(tempAvg = tempAvg, slope = tempSlopeCPerMin)
         Column(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(9.dp)
@@ -77,18 +71,21 @@ fun CockpitHero(
     }
 }
 
-@Composable
-private fun TempRing(
-    tempAvg: Float?,
-    tempMin: Float?,
-    tempMax: Float?,
-    slope: Float?
-) {
+/** Pure model for the ring's fill/label/color — reused by the landscape layout. */
+data class TempRingModel(val fraction: Float, val label: String, val color: Color)
+
+fun tempRingModel(tempAvg: Float?, slope: Float?): TempRingModel {
     // Fill range: 0..60 °C → 0..100 % of a 270° sweep. Matches the
     // prototype (24.6 °C → ~41 % fill, ~110° sweep).
-    val fillFraction = ((tempAvg ?: 0f) / 60f).coerceIn(0f, 1f)
-    val sweepDeg = 270f * fillFraction
-    val (statusLabel, statusColor) = thermalStatus(tempAvg, slope)
+    val fraction = ((tempAvg ?: 0f) / 60f).coerceIn(0f, 1f)
+    val (label, color) = thermalStatus(tempAvg, slope)
+    return TempRingModel(fraction, label, color)
+}
+
+@Composable
+private fun TempRing(tempAvg: Float?, slope: Float?) {
+    val model = tempRingModel(tempAvg, slope)
+    val sweepDeg = 270f * model.fraction
 
     Box(
         modifier = Modifier.size(152.dp),
@@ -112,7 +109,7 @@ private fun TempRing(
             )
             if (tempAvg != null) {
                 drawArc(
-                    color = statusColor,
+                    color = model.color,
                     startAngle = 135f,
                     sweepAngle = sweepDeg,
                     useCenter = false,
@@ -126,10 +123,7 @@ private fun TempRing(
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     tempAvg?.let { "%.1f".format(it) } ?: "--",
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 36.sp,
-                    letterSpacing = (-1.5).sp,
+                    style = BornType.hero,
                     color = BornText
                 )
                 Text(
@@ -138,35 +132,20 @@ private fun TempRing(
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 14.sp,
                     color = BornMuted,
-                    modifier = Modifier.padding(start = 2.dp, bottom = 4.dp)
+                    modifier = Modifier.padding(start = 2.dp, bottom = 6.dp)
                 )
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                statusLabel,
+                model.label,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 2.5.sp,
-                color = statusColor
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                rangeLabel(tempMin, tempMax),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 7.5.sp,
-                letterSpacing = 1.5.sp,
-                color = BornMuted
+                color = model.color
             )
         }
     }
-}
-
-private fun rangeLabel(min: Float?, max: Float?): String {
-    if (min == null && max == null) return "--"
-    val a = min?.let { "%.1f".format(it) } ?: "--"
-    val b = max?.let { "%.1f".format(it) } ?: "--"
-    return "$a / $b"
 }
 
 private fun thermalStatus(tempAvg: Float?, slope: Float?): Pair<String, Color> = when {
@@ -286,12 +265,22 @@ private fun CockpitTile12V(volt12v: Float?) {
 }
 
 /**
- * BLE status pill used in the cockpit header. Tinted cobre with a small
- * sheen dot when connected; falls back to muted when disconnected.
+ * BLE status pill used in the cockpit header. Tinted by [ConnectionState]:
+ * cobre when connected, amber while transitioning, red on error, muted when
+ * idle/disconnected — matching the semantic grammar already established by
+ * [HealthConfidenceRow] and the thermal ring.
  */
 @Composable
-fun BleChip(connected: Boolean, label: String, modifier: Modifier = Modifier) {
-    val tint = if (connected) CupraCobre else BornMuted
+fun BleChip(connectionState: ConnectionState, label: String, modifier: Modifier = Modifier) {
+    val tint = when (connectionState) {
+        ConnectionState.CONNECTED -> CupraCobre
+        ConnectionState.ERROR -> RedHi
+        ConnectionState.SCANNING,
+        ConnectionState.CONNECTING,
+        ConnectionState.INITIALIZING -> AmberHi
+        ConnectionState.DISCONNECTED -> BornMuted
+    }
+    val dotTint = if (connectionState == ConnectionState.CONNECTED) CupraSheen else tint
     Surface(
         color = tint.copy(alpha = 0.13f),
         shape = RoundedCornerShape(20.dp),
@@ -306,7 +295,7 @@ fun BleChip(connected: Boolean, label: String, modifier: Modifier = Modifier) {
                 Modifier
                     .size(6.dp)
                     .clip(CircleShape)
-                    .background(if (connected) CupraSheen else BornMuted)
+                    .background(dotTint)
             )
             Spacer(Modifier.width(7.dp))
             Text(
@@ -315,7 +304,7 @@ fun BleChip(connected: Boolean, label: String, modifier: Modifier = Modifier) {
                 fontSize = 8.5.sp,
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = 1.5.sp,
-                color = if (connected) CupraSheen else BornMuted
+                color = tint
             )
         }
     }
