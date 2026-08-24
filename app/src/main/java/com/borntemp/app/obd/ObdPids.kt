@@ -143,14 +143,24 @@ object ObdPids {
     const val PID_COOLANT_TEMPS = "22189D"
 
     /** Cell N voltage. DID = 1E40 + (N-1). 2 data bytes BE,
-     *  `(XX*256+YY)/1000 + 1` = V. */
+     *  `(XX*256+YY)/1000 + 1` = V.
+     *
+     *  No longer read at runtime: [PID_CELL_VOLT_MAX_IDX] / [PID_CELL_VOLT_MIN_IDX]
+     *  already carry the extreme cell's voltage, so the second round-trip this
+     *  DID needed is pure cost. Kept for a future per-cell sweep. */
     const val PID_CELL_VOLT_BASE = "221E40"
 
-    /** Cell index of pack max voltage (1E33). Data: `[?, ?, ZZ, ?]`, idx in ZZ. */
+    /** Pack max cell voltage + its index (1E33). See [parseCellExtreme]. */
     const val PID_CELL_VOLT_MAX_IDX = "221E33"
 
-    /** Cell index of pack min voltage (1E34). Data: `[?, ?, ZZ, ?]`, idx in ZZ. */
+    /** Pack min cell voltage + its index (1E34). See [parseCellExtreme]. */
     const val PID_CELL_VOLT_MIN_IDX = "221E34"
+
+    /** Cells in the HV pack — MEB 77 kWh is 12 modules × 8 = 96, not the 108
+     *  the first handoff assumed. Confirmed against field captures: every cell
+     *  index reported by 1E33/1E34 across three sessions falls in 1..96, and
+     *  pack voltage / 96 lands between the reported min and max cell. */
+    const val CELL_COUNT = 96
 
     /** Lifetime energy throughput. 16 data bytes: bytes 0..7 = total charge,
      *  8..15 = total discharge. Each 4-byte BE chunk / 8583.07 = kWh. */
@@ -291,15 +301,33 @@ object ObdPids {
         return raw / 4.0f
     }
 
-    /** HV pack current from 1E3C: first 2 bytes BE, two's-complement signed,
-     *  scale `/5` = A. Sign convention from handoff: + = charge / regen. */
-    fun parsePackCurrent(response: String): Float? {
-        val hex = extractUdsDataHex(response) ?: return null
-        if (hex.length < 4) return null
-        var raw = hex.substring(0, 4).toIntOrNull(16) ?: return null
-        if (raw >= 0x8000) raw -= 0x10000
-        return raw / 5.0f
-    }
+    /**
+     * HV pack current from 1E3C — **decoding unresolved, deliberately returns
+     * null.**
+     *
+     * The handoff formula (first 2 bytes BE signed, `/5` = A) does not survive
+     * field data. Across three captures those two bytes sit at 0x0016–0x0017
+     * whatever the car is doing, yielding a constant ±4.4 A: the 2026-08-16
+     * session reported −4.40 A / −1.58 kW throughout a DC charge that moved SOC
+     * from 20 % to 55 % in twelve minutes, i.e. roughly 135 kW, and the very
+     * same −4.40 A while driving.
+     *
+     * The full 32-bit payload does move with load — higher under DC charge,
+     * lower and rapidly fluctuating while driving — so the current is in there,
+     * but three sessions were not enough to pin the encoding: it is neither
+     * monotonic enough for a coulomb counter (it falls while charging) nor
+     * cleanly separable by mode (charge and drive ranges overlap).
+     *
+     * Returning null costs the live power readout until the encoding is known,
+     * and that is the point: a wrong current propagated into the power display,
+     * the charge ETA, ABRP telemetry, and — silently — [ChargeEnergyIntegrator],
+     * whose `energyKwh <= 0` guard discarded every pass because the power was
+     * negative. That is why SOH stayed UNAVAILABLE through a qualifying charge.
+     *
+     * The raw frame is captured every tick as `PID BMS:221E3C`, so a session
+     * with a known charger power will settle the scale.
+     */
+    fun parsePackCurrent(@Suppress("UNUSED_PARAMETER") response: String): Float? = null
 
     /** OBD-II Mode 01 PID 0x42 — kept for legacy tests, not used at runtime. */
     fun parse12vVoltage(response: String): Float? {
@@ -356,10 +384,32 @@ object ObdPids {
     }
 
     /** Cell index byte from 1E33 / 1E34 — the index lives in the 3rd byte (ZZ). */
-    fun parseCellVoltIndex(response: String): Int? {
+    /** One extreme-cell reading: its voltage in mV and its 1-based index. */
+    data class CellExtreme(val millivolts: Int, val index: Int)
+
+    /**
+     * Decode a 1E33 / 1E34 frame: `[VV VV][II II]` — a big-endian cell voltage
+     * scaled `/4096` V, then a big-endian 1-based cell index.
+     *
+     * The original handoff read the index from byte 2 alone and assumed the
+     * voltage needed a second read of `1E40 + (idx-1)`. Byte 2 is the high half
+     * of the index and is always 0 on a 96-cell pack, so the index parsed as 0,
+     * failed the range check, and no cell voltage was ever resolved.
+     *
+     * Scale confirmed against pack voltage on two independent captures:
+     * 2026-08-12 21:18:43 reported min 0x3B60 → 3.711 V and max 0x3B89 →
+     * 3.721 V, and 96 × the midpoint gives 356.8 V against a measured 356.5 V;
+     * at 21:21:12 the same check gives 368.1 V against 368.0 V.
+     */
+    fun parseCellExtreme(response: String): CellExtreme? {
         val hex = extractUdsDataHex(response) ?: return null
-        if (hex.length < 6) return null
-        return hex.substring(4, 6).toIntOrNull(16)
+        if (hex.length < 8) return null
+        val rawV = hex.substring(0, 4).toIntOrNull(16) ?: return null
+        val index = hex.substring(4, 8).toIntOrNull(16) ?: return null
+        if (index !in 1..CELL_COUNT) return null
+        val volts = rawV / 4096f
+        if (volts !in 2f..5f) return null
+        return CellExtreme(millivolts = (volts * 1000f).toInt(), index = index)
     }
 
     /** Individual cell voltage from 1E40+ : `(XX*256+YY)/1000 + 1` V → mV. */

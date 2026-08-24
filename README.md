@@ -65,7 +65,8 @@ L'init configure le flow-control 29 bits (`ATFCSH` / `STCFCPA`) sur le BMS, et
 | Temp. pack min | `221E0F` | BMS | `(B0×256+B1) / 64` = °C |
 | SOC BMS (réel) | `22028C` | BMS | `raw / 2.5` = % |
 | Tension pack HV | `221E3B` | BMS | `(B0×256+B1) / 4` = V |
-| Courant pack HV | `221E3C` | BMS | 2 premiers octets BE **signés** `/ 5` = A (+ = charge/régén) |
+| Courant pack HV | `221E3C` | BMS | ⚠️ **décodage non résolu — l'app ne publie plus de valeur** (voir ci-dessous) |
+| Cellule min / max | `221E34` / `221E33` | BMS | `[VV VV][II II]` → tension `BE / 4096` = V, index cellule `BE` (1..96) |
 | Mode véhicule | `227448` | BMS | `0`=veille, `1`=roulage, `4`=charge AC, `6`=charge DC |
 | Pompe refroid. HV | `22743B` | BMS | 1 octet = % |
 | Temp. liquide refroid. | `22189D` | BMS | `WW XX YY ZZ` → sortie `(WW×256+XX)/64`, entrée `(YY×256+ZZ)/64` °C |
@@ -73,6 +74,28 @@ L'init configure le flow-control 29 bits (`ATFCSH` / `STCFCPA`) sur le BMS, et
 | MEC (capacité max) | `222AB2` | EM | 4 octets BE Wh `/ 1000` = kWh — **muet sur la Cupra Born (NO DATA)** |
 | EC (énergie courante) | `222AB8` | EM | idem MEC — **muet sur la Cupra Born (NO DATA)** |
 
+> **Courant pack (`221E3C`) — non résolu.** La formule du handoff (2 premiers
+> octets BE signés `/5`) ne résiste pas aux relevés : ces deux octets restent
+> collés à `0x0016`–`0x0017` quoi que fasse la voiture, soit un ±4,4 A constant.
+> Le relevé du 2026-08-16 affiche −4,40 A / −1,58 kW pendant une charge DC qui
+> fait passer le SOC de 20 % à 55 % en douze minutes (≈ 135 kW), et le même
+> −4,40 A en roulage. Les 32 bits complets, eux, bougent avec la charge, mais
+> trois sessions n'ont pas suffi à en fixer l'encodage : la valeur baisse parfois
+> en pleine charge (donc pas un compteur coulométrique) et les plages charge et
+> roulage se recouvrent.
+>
+> En attendant, `parsePackCurrent` retourne `null` : un courant faux se propageait
+> dans la puissance affichée, l'ETA, la télémétrie ABRP, et — silencieusement —
+> dans `ChargeEnergyIntegrator`, dont le garde-fou `energyKwh <= 0` rejetait
+> chaque passe puisque la puissance était négative. C'est la raison pour laquelle
+> le SOH restait `UNAVAILABLE` malgré une charge qualifiante. La trame brute est
+> capturée à chaque tick (`PID BMS:221E3C`) ; une session sur un chargeur de
+> puissance connue suffira à fixer l'échelle.
+>
+> **Pack à 96 cellules** (12 modules × 8), et non 108 comme supposé initialement :
+> tous les index rapportés par `1E33`/`1E34` sur trois sessions tombent dans
+> 1..96, et la tension pack ÷ 96 se situe bien entre les cellules min et max.
+>
 > Le SOC affiché (HMI) est dérivé du SOC BMS : `SOC_HMI = SOC_BMS × 51/46 − 6.4`.
 > MEC/EC sont sondés sur l'EM (`0x10`) puis en repli BMS/BREG/DCDC ; aucun module
 > n'a répondu sur cette voiture (relevé 2026-06-21).
