@@ -124,7 +124,13 @@ class SessionCapture(private val context: Context) {
         powerKw: Float? = null,
     ) {
         val w = sohWriter ?: return
-        fun f(x: Float?, digits: Int = 2) = if (x == null) "" else "%.${digits}f".format(x)
+        // Locale.US is not cosmetic here: the default locale on this phone is
+        // French, whose decimal separator is a comma — in a comma-separated
+        // file every float silently became two columns and shifted every field
+        // after it. Field capture 2026-08-16 shows "360,00" where the row meant
+        // 360.00 V. The timestamp formats above already pin Locale.US.
+        fun f(x: Float?, digits: Int = 2) =
+            if (x == null) "" else String.format(Locale.US, "%.${digits}f", x)
         val row = buildString {
             append(isoFormat.format(Date(timestampMs))); append(',')
             append(timestampMs);                          append(',')

@@ -80,13 +80,14 @@ class ObdPidsTest {
     }
 
     @Test
-    fun `parses HV pack current from 4-byte response`() {
-        assertEquals(4.4f, ObdPids.parsePackCurrent("17FE007B07621E3C001664DC")!!, delta)
-    }
-
-    @Test
-    fun `parses negative pack current as signed two's complement`() {
-        assertEquals(-10.0f, ObdPids.parsePackCurrent("17FE007B07621E3CFFCEAAAA")!!, delta)
+    fun `pack current stays unresolved rather than reporting a wrong value`() {
+        // Real frames, 2026-08-16: the first two bytes are pinned at 0x0016
+        // during a ~135 kW DC charge and again while driving. The old formula
+        // read them as a signed value over 5 and produced a constant 4.4 A,
+        // which is what poisoned power, ETA, ABRP and the SOH integrator.
+        // Until the encoding is known, no number beats a wrong number.
+        assertNull(ObdPids.parsePackCurrent("17FE007B07621E3C001664DC"))
+        assertNull(ObdPids.parsePackCurrent("17FE007B07621E3C0017151F"))
     }
 
     // ── Vehicle mode / pump / coolant temps ─────────────────────────────────
@@ -119,7 +120,8 @@ class ObdPidsTest {
     fun `cellVoltPid builds correct DID for given cell index`() {
         assertEquals("221E40", ObdPids.cellVoltPid(1))
         assertEquals("221E41", ObdPids.cellVoltPid(2))
-        assertEquals("221EAB", ObdPids.cellVoltPid(108))
+        // Last cell of the 96-cell MEB pack, not the 108 first assumed.
+        assertEquals("221E9F", ObdPids.cellVoltPid(ObdPids.CELL_COUNT))
     }
 
     @Test
@@ -129,9 +131,28 @@ class ObdPidsTest {
     }
 
     @Test
-    fun `parses cell index from 1E33 third byte`() {
-        // Payload: 4 bytes, 3rd byte = idx = 0x2A = 42
-        assertEquals(42, ObdPids.parseCellVoltIndex("17FE007B07621E3300002A00"))
+    fun `parses extreme cell voltage and index from a real 1E33 frame`() {
+        // Captured 2026-08-12 21:18:44 — max cell: 0x3B89 / 4096 = 3.7209 V,
+        // index 0x0010 = 16. Pack read 356.5 V at the same instant and
+        // 96 x 3.7209 = 357.2 V, so the scale holds.
+        val max = ObdPids.parseCellExtreme("17FE007B07621E333B890010")!!
+        assertEquals(3720, max.millivolts)
+        assertEquals(16, max.index)
+    }
+
+    @Test
+    fun `parses the matching 1E34 min-cell frame below the max`() {
+        // Same tick: min cell 0x3B60 / 4096 = 3.7109 V, index 0x0015 = 21.
+        val min = ObdPids.parseCellExtreme("17FE007B07621E343B600015")!!
+        assertEquals(3710, min.millivolts)
+        assertEquals(21, min.index)
+    }
+
+    @Test
+    fun `rejects a cell index outside the 96-cell pack`() {
+        // The old parser read the index from byte 2 alone — always 0 here, so
+        // it failed the range check and no cell voltage was ever resolved.
+        assertNull(ObdPids.parseCellExtreme("17FE007B07621E333B89FFFF"))
     }
 
     // ── Energy content (MEC / EC) ──────────────────────────────────────────

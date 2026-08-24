@@ -101,46 +101,25 @@ class ObdSessionController(private val application: Application) {
     }
 
     /**
-     * Read one of the cell-index DIDs (1E33 / 1E34) and say *why* it failed
-     * when it does. Cell voltages reach the UI through three links — index
-     * DID answers, index decodes into 1..108, pointed-to cell reads back a
-     * sane voltage — and a silent null anywhere left the card showing "--"
-     * with no way to tell which link broke. The raw frames are in the .log
-     * either way; these events add the interpretation.
+     * Read one extreme-cell DID (1E33 max / 1E34 min). One round-trip now
+     * yields both the voltage and the cell index — the frame always carried
+     * both, so the follow-up read of `1E40 + (idx-1)` is gone.
+     *
+     * Still traces its failures: the card showing "--" used to say nothing
+     * about which link broke.
      */
-    private suspend fun readCellIndex(pid: String, label: String): Int? {
+    private suspend fun readCellExtreme(pid: String, label: String): ObdPids.CellExtreme? {
         val raw = queryOn(pid, ObdPids.ECU_BMS)
         if (raw == null) {
-            capture.event("CELL_IDX $label ($pid) — aucune réponse")
+            capture.event("CELL $label ($pid) — aucune réponse")
             return null
         }
-        val idx = ObdPids.parseCellVoltIndex(raw)
-        if (idx == null) {
-            capture.event("CELL_IDX $label ($pid) — trame non décodée: ${raw.trim()}")
+        val cell = ObdPids.parseCellExtreme(raw)
+        if (cell == null) {
+            capture.event("CELL $label ($pid) — trame non décodée: ${raw.trim()}")
             return null
         }
-        if (idx !in 1..108) {
-            capture.event("CELL_IDX $label ($pid) — index hors 1..108: $idx")
-            return null
-        }
-        return idx
-    }
-
-    /** Read the voltage of the cell an index DID pointed at, tracing a missing
-     *  or out-of-range reply. See [readCellIndex]. */
-    private suspend fun readCellVoltMv(idx: Int, label: String): Int? {
-        val pid = ObdPids.cellVoltPid(idx)
-        val raw = queryOn(pid, ObdPids.ECU_BMS)
-        if (raw == null) {
-            capture.event("CELL_V $label — cellule $idx ($pid) sans réponse")
-            return null
-        }
-        val mv = ObdPids.parseCellVoltMv(raw)
-        if (mv == null) {
-            capture.event("CELL_V $label — cellule $idx ($pid) hors 2–5 V: ${raw.trim()}")
-            return null
-        }
-        return mv
+        return cell
     }
 
     /**
@@ -483,14 +462,14 @@ class ObdSessionController(private val application: Application) {
                 val (ci, co) = ObdPids.parseCoolantTemps(it)
                 coolantIn = ci; coolantOut = co
             }
-            readCellIndex(ObdPids.PID_CELL_VOLT_MIN_IDX, "min")?.let { cellMinIdx = it }
-            readCellIndex(ObdPids.PID_CELL_VOLT_MAX_IDX, "max")?.let { cellMaxIdx = it }
-
-            // Resolve the actual min/max cell voltages by reading the two
-            // pointed-to cells (1E40 + (idx-1)). Two extra PIDs per slow tick
-            // instead of iterating all 108 — keeps the loop snappy.
-            cellMinIdx?.let { idx -> readCellVoltMv(idx, "min")?.let { cellMinMv = it } }
-            cellMaxIdx?.let { idx -> readCellVoltMv(idx, "max")?.let { cellMaxMv = it } }
+            // Two PIDs, not four: 1E33 / 1E34 each return the extreme cell's
+            // voltage together with its index.
+            readCellExtreme(ObdPids.PID_CELL_VOLT_MIN_IDX, "min")?.let {
+                cellMinIdx = it.index; cellMinMv = it.millivolts
+            }
+            readCellExtreme(ObdPids.PID_CELL_VOLT_MAX_IDX, "max")?.let {
+                cellMaxIdx = it.index; cellMaxMv = it.millivolts
+            }
 
             // MEC / EC / 12V — try the EM module first (CSV-documented host),
             // fall back to the BMS itself if EM is silent. The 2026-06-21
