@@ -346,6 +346,22 @@ class ObdSessionController(private val application: Application) {
         step("ATCRA17FE007B (back to BMS)", "ATCRA17FE007B")
         step("ATSHFC007B",           "ATSHFC007B")
 
+        // ── HV current DID hunt ──────────────────────────────────────────
+        // 1E3C does not decode as a current: see ObdPids.parsePackCurrent. Two
+        // models were fitted against SOC-derived current over three captures
+        // and both failed to replicate — the raw level (R² 0.73 on one session,
+        // 0.04 with an inverted slope on another) and its derivative
+        // (r = +0.30 / +0.12 / −0.03). So stop decoding that DID and look for a
+        // better one: sweep its neighbourhood once per connect and let a
+        // charging session show which value tracks charger power. ~16 extra
+        // reads, only at connect. Delete this block once the DID is known.
+        capture.event("--- Sweep 1E30..1E3F (chasse au courant HV) ---")
+        for (did in 0x1E30..0x1E3F) {
+            val pid = "22%04X".format(did)
+            step("SWEEP $pid", pid, ObdPids.ECU_BMS)
+        }
+        capture.event("--- Sweep end ---")
+
         capture.event("--- Probe v6 end ---")
         log("--- Sonde terminée ---", LogLevel.INFO)
     }
