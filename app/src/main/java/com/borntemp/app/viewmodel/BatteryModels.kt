@@ -1,5 +1,9 @@
 package com.borntemp.app.viewmodel
 
+import com.borntemp.app.domain.ChargeRecord
+import com.borntemp.app.domain.LastKnown
+import com.borntemp.app.domain.MonthEnergy
+import com.borntemp.app.domain.ParkedGap
 import com.borntemp.app.domain.PowerReading
 import com.borntemp.app.domain.Reading
 import com.borntemp.app.domain.SessionSummary
@@ -209,6 +213,8 @@ data class UiState(
     val udsTraceFileUri: android.net.Uri? = null,
     /** Current charge, or the last one once it ended; null before any. */
     val chargeSummary: SessionSummary? = null,
+    /** What the app shows when the car isn't connected. */
+    val offline: OfflineHistory = OfflineHistory(),
     val chargeProjection: ChargeProjection = ChargeProjection(),
     val thermalTrajectory: ThermalTrajectory = ThermalTrajectory(
         slopeCPerMin = null,
@@ -302,4 +308,19 @@ data class DerivedSnapshot(
     /** Measured V×I, else estimated from the SOC slope — see [PowerReading.source]. */
     val power: PowerReading? = null,
 )
+
+/** Offline history snapshot, loaded at start and refreshed when records close. */
+data class OfflineHistory(
+    val lastKnown: LastKnown? = null,
+    /** Newest first. */
+    val charges: List<ChargeRecord> = emptyList(),
+    /** Newest month first. */
+    val months: List<MonthEnergy> = emptyList(),
+    /** Newest first. */
+    val parked: List<ParkedGap> = emptyList(),
+) {
+    companion object {
+        const val MAX_CHARGES = 30
+    }
+}
 

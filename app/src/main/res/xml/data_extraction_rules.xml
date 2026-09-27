@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup rules. Keep the offline history (files/) and settings
+     (shared prefs); exclude the raw captures in external Download/, which would
+     exceed the 25 MB quota and disable backup entirely. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="." />
+        <include domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="." />
+        <include domain="sharedpref" path="." />
+        <include domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

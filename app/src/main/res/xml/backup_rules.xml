@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older (fullBackupContent). See data_extraction_rules.xml. -->
+<full-backup-content>
+    <include domain="file" path="." />
+    <include domain="sharedpref" path="." />
+    <!-- Raw captures grow ~1.5 MB per session: left in, they push the app past
+         the 25 MB Auto Backup quota and then NOTHING is backed up, history
+         included. They are pulled over USB instead. -->
+    <exclude domain="external" path="." />
+</full-backup-content>
