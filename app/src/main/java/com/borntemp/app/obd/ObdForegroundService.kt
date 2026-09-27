@@ -205,5 +205,6 @@ class ObdForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         sessionJob?.cancel()
+        ObdSessionHolder.controllerFor(this).flushCapture()
     }
 }

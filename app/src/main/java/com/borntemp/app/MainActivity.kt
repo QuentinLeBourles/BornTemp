@@ -65,6 +65,13 @@ class MainActivity : ComponentActivity() {
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
+    /** Flush, don't close: the session outlives the Activity (foreground
+     *  service), but leaving the foreground is where the process can die. */
+    override fun onStop() {
+        super.onStop()
+        viewModel.flushCapture()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

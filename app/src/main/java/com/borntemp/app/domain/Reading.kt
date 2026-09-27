@@ -10,6 +10,8 @@ data class Reading<out T>(
     val status: ReadStatus,
     val timestampMs: Long,
     val detail: String? = null,
+    /** UDS negative response code when [status] is NRC. */
+    val nrc: Int? = null,
 ) {
     val isOk: Boolean get() = status == ReadStatus.OK && value != null
 
@@ -29,7 +31,7 @@ data class Reading<out T>(
 
 /** Build a reading from a classified reply and its parsed value. */
 fun <T> readingOf(result: UdsResult, parsed: T?, timestampMs: Long): Reading<T> = when {
-    result.status != ReadStatus.OK -> Reading(null, result.status, timestampMs, result.detail)
+    result.status != ReadStatus.OK -> Reading(null, result.status, timestampMs, result.detail, result.nrc)
     parsed == null -> Reading(null, ReadStatus.PARSE_ERROR, timestampMs, "unparsed")
     else -> Reading(parsed, ReadStatus.OK, timestampMs)
 }

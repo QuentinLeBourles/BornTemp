@@ -199,6 +199,7 @@ data class UiState(
     val captureFileName: String? = null,
     val sohHistoryFileUri: android.net.Uri? = null,
     val sohHistoryFileName: String? = null,
+    val udsTraceFileUri: android.net.Uri? = null,
     val chargeProjection: ChargeProjection = ChargeProjection(),
     val thermalTrajectory: ThermalTrajectory = ThermalTrajectory(
         slopeCPerMin = null,

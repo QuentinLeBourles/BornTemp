@@ -32,4 +32,5 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun connect(device: BluetoothDevice) = controller.connect(device)
     fun disconnect() = controller.disconnect()
     fun refreshNow() = controller.refreshNow()
+    fun flushCapture() = controller.flushCapture()
 }

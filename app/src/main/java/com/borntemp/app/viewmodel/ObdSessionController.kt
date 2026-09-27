@@ -16,6 +16,8 @@ import com.borntemp.app.domain.ReadStatus
 import com.borntemp.app.domain.Reading
 import com.borntemp.app.domain.Signal
 import com.borntemp.app.domain.classifyUdsResponse
+import com.borntemp.app.domain.packAverageTemp
+import com.borntemp.app.domain.shouldWriteCsvRow
 import com.borntemp.app.domain.readingOf
 import com.borntemp.app.domain.shouldRetry
 import com.borntemp.app.domain.udsTxFrame
@@ -111,10 +113,6 @@ class ObdSessionController(private val application: Application) {
         // if the PID hasn't answered for more than this multiplier × the
         // configured polling interval, the UI drops back to "--".
         private const val STALE_TIMEOUT_MULT = 3
-
-        // Append one CSV row at most every 30 s, even if the slow tick fires
-        // more often — keeps the file lean across long sessions.
-        private const val SOH_CSV_MIN_INTERVAL_MS = 30_000L
 
         private const val DEBUG_RAW_RESPONSES = true
 
@@ -309,6 +307,7 @@ class ObdSessionController(private val application: Application) {
                     captureFileUri = capture.shareUri(),
                     captureFileName = captureFile.name,
                     sohHistoryFileUri = capture.shareSohUri(),
+                    udsTraceFileUri = capture.shareUdsUri(),
                     sohHistoryFileName = capture.currentSohFile()?.name
                 )}
                 log("Capture → ${captureFile.name}", LogLevel.OK)
@@ -471,6 +470,10 @@ class ObdSessionController(private val application: Application) {
         pollingJob = null
     }
 
+    /** Flush capture files without closing them (Activity onStop, service
+     *  teardown): background polling keeps writing afterwards. */
+    fun flushCapture() = capture.flush()
+
     fun refreshNow() {
         if (obdManager.isConnected) {
             scope.launch { readAllData() }
@@ -616,12 +619,7 @@ class ObdSessionController(private val application: Application) {
         // ── Derived ──────────────────────────────────────────────────────────
         val powerKw = if (voltage != null && currentNow != null)
             voltage * currentNow / 1000f else null
-        val finalAvg = when {
-            packTempMax != null && packTempMin != null -> (packTempMax + packTempMin) / 2f
-            packTempMax != null -> packTempMax
-            packTempMin != null -> packTempMin
-            else -> null
-        }
+        val finalAvg = packAverageTemp(packTempMin, packTempMax)
 
         // §7 bug #1 — stale HV current: if the PID didn't answer this tick,
         // we use the previous reading only if it's younger than a few polls.
@@ -827,8 +825,9 @@ class ObdSessionController(private val application: Application) {
         // header. The empty cells sohSample() writes for null floats keep it
         // spreadsheet-friendly, so we log whatever the BMS did answer and skip
         // only rows that would carry no measurement at all.
-        val hasAnyMeasurement = finalAvg != null || socBms != null
-        if (hasAnyMeasurement && now - lastSohSampleMs >= SOH_CSV_MIN_INTERVAL_MS) {
+        val hasAnyMeasurement = packTempMin != null || packTempMax != null || socBms != null
+        val charging = chargeState == ChargeState.AC_CHARGING || chargeState == ChargeState.DC_CHARGING
+        if (hasAnyMeasurement && shouldWriteCsvRow(lastSohSampleMs, now, charging)) {
             capture.sohSample(
                 timestampMs = now,
                 mecKwh = mecKwh,
@@ -846,7 +845,9 @@ class ObdSessionController(private val application: Application) {
                 confidence = confidence.name,
                 voltageHv = voltage,
                 currentHv = effectiveCurrent,
-                powerKw = effectivePower
+                powerKw = effectivePower,
+                volt12v = volt12v,
+                readings = readings,
             )
             lastSohSampleMs = now
         }

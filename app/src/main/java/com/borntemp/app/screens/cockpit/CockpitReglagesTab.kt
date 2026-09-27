@@ -1,6 +1,7 @@
 package com.borntemp.app.screens.cockpit
 
 import com.borntemp.app.viewmodel.AcquisitionSetting
+import com.borntemp.app.viewmodel.ConnectionState
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
@@ -64,7 +65,11 @@ fun CockpitReglagesTab(
                 captureFileUri = uiState.captureFileUri,
                 captureFileName = uiState.captureFileName,
                 sohHistoryFileUri = uiState.sohHistoryFileUri,
-                sohHistoryFileName = uiState.sohHistoryFileName
+                sohHistoryFileName = uiState.sohHistoryFileName,
+                udsTraceFileUri = uiState.udsTraceFileUri,
+                // Files are flushed per row, but a live session keeps adding
+                // to them: whatever is shared now is a partial export.
+                sessionActive = uiState.connectionState == ConnectionState.CONNECTED
             )
         }
 
@@ -156,7 +161,9 @@ private fun JournalCollapsible(
     captureFileUri: android.net.Uri?,
     captureFileName: String?,
     sohHistoryFileUri: android.net.Uri?,
-    sohHistoryFileName: String?
+    sohHistoryFileName: String?,
+    udsTraceFileUri: android.net.Uri?,
+    sessionActive: Boolean,
 ) {
     val summary = "${logEntries.size} lignes"
     CollapsibleCard(label = "JOURNAL", summary = summary) {
@@ -172,11 +179,30 @@ private fun JournalCollapsible(
                 modifier = Modifier.weight(1f)
             )
             ExportButton(
-                label = "HISTO SOH (CSV) →",
+                label = if (sessionActive) "CSV (PARTIEL) →" else "HISTO SOH (CSV) →",
                 uri = sohHistoryFileUri,
                 fileName = sohHistoryFileName,
                 mime = "text/csv",
+                partial = sessionActive,
                 modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        ExportButton(
+            label = "TRACE UDS (DEBUG) →",
+            uri = udsTraceFileUri,
+            fileName = udsTraceFileUri?.lastPathSegment,
+            mime = "text/csv",
+            partial = sessionActive,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (sessionActive) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Session en cours : les exports s'arrêtent à la dernière ligne écrite.",
+                fontFamily = FontFamily.Monospace,
+                fontSize = 8.sp,
+                color = AmberHi
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -233,7 +259,8 @@ private fun ExportButton(
     uri: android.net.Uri?,
     fileName: String?,
     mime: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    partial: Boolean = false,
 ) {
     val context = LocalContext.current
     val enabled = uri != null
@@ -243,11 +270,15 @@ private fun ExportButton(
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = mime
                     putExtra(Intent.EXTRA_STREAM, u)
-                    putExtra(Intent.EXTRA_SUBJECT, fileName ?: "BornTemp")
+                    val name = fileName ?: "BornTemp"
+                    putExtra(
+                        Intent.EXTRA_SUBJECT,
+                        if (partial) "$name (partiel, session en cours)" else name
+                    )
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(
-                    Intent.createChooser(send, "Exporter").apply {
+                    Intent.createChooser(send, if (partial) "Exporter (partiel)" else "Exporter").apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                 )
