@@ -17,6 +17,13 @@ class BatterySettings(context: Context) {
     var packTypeOverride: PackTypeOverride
         get() = PackTypeOverride.fromName(prefs.getString("pack_type_override", null))
         set(v) { prefs.edit().putString("pack_type_override", v.name).apply() }
+
+    /** Last capacity measured over a charge, kept so SOH survives a restart:
+     *  a qualifying charge is rare, and without this every reconnect showed
+     *  "Indisponible" until the next one. Null until the first measurement. */
+    var measuredCapacityKwh: Float?
+        get() = prefs.getFloat("measured_capacity_kwh", Float.NaN).takeUnless { it.isNaN() }
+        set(v) { prefs.edit().putFloat("measured_capacity_kwh", v ?: Float.NaN).apply() }
 }
 
 enum class PackTypeOverride(val label: String, val packType: PackType?) {

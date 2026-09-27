@@ -74,20 +74,23 @@ class ChargeAnalytics(
 
     /**
      * Heuristic ETA (minutes) from the current SoC to [targetSocPct].
-     * Uses MEC-derived capacity and a smoothed power. Returns null if any
-     * input is missing, the gap is non-positive, or the car isn't actively
-     * charging.
+     * Uses a smoothed power and [capacityKwh] — the pack capacity the caller
+     * considers current. That used to be the MEC reading, but MEC is silent on
+     * this Born, which pinned every ETA to null; the caller now resolves a
+     * fallback chain (see ObdSessionController's effective capacity). Returns
+     * null if any input is missing, the gap is non-positive, or the car isn't
+     * actively charging.
      */
     fun etaMinutesTo(
         targetSocPct: Float,
         socNowPct: Float?,
-        mecKwh: Float?,
+        capacityKwh: Float?,
         chargeState: ChargeState,
         windowMs: Long = 60_000L,
     ): Float? {
         if (chargeState != ChargeState.AC_CHARGING &&
             chargeState != ChargeState.DC_CHARGING) return null
-        if (socNowPct == null || mecKwh == null) return null
+        if (socNowPct == null || capacityKwh == null) return null
         val avgP = avgPowerKw(windowMs) ?: return null
         if (avgP <= 1f) return null
         val gapPct = targetSocPct - socNowPct
@@ -95,7 +98,7 @@ class ChargeAnalytics(
         // Charging power is reported with the handoff sign convention
         // (+ = charge); we still abs() so a momentary regen sample in
         // the window doesn't flip the ETA sign.
-        return gapPct / 100f * mecKwh / abs(avgP) * 60f
+        return gapPct / 100f * capacityKwh / abs(avgP) * 60f
     }
 
     fun energyIntegrator(): ChargeEnergyIntegrator = integrator
@@ -214,6 +217,65 @@ class ChargeEnergyIntegrator(
     }
 
     fun lastResult(): Result? = lastResult
+}
+
+/**
+ * Pack capacity from the BMS's own lifetime charge counter (1E32), the
+ * measurement [ChargeEnergyIntegrator] can't make on this Born: it needs pack
+ * current, and 1E3C's encoding is still unresolved, so it never sees power.
+ *
+ * The counter is energy into the pack, so across one charge
+ * `capacity = ΔkWh / ΔSOC`. Five field charges (2026-08-12 → 09-26) put it at
+ * 79.5–82.8 kWh per 100 % BMS SOC, i.e. ~72 kWh per 100 % HMI SOC. SOC is the
+ * HMI value so the result compares against the same net reference as MEC.
+ *
+ * Fed only on ticks where the counter was actually read — it moves in steps,
+ * and pairing a stale counter with a fresh SOC would skew every pass. The
+ * estimate is live: once a charge spans [minSocDeltaPct] it updates on every
+ * read, so SOH appears mid-charge rather than only after unplugging.
+ */
+class LifetimeCounterCapacity(
+    private val minSocDeltaPct: Float = 15f,
+    private val plausibleKwh: ClosedFloatingPointRange<Float> = 40f..100f,
+) {
+
+    private data class Anchor(val soc: Float, val chargedKwh: Float)
+
+    private var anchor: Anchor? = null
+    private var lastResult: ChargeEnergyIntegrator.Result? = null
+
+    fun feed(t: Long, socHmi: Float?, chargedKwh: Float?, mode: ObdPids.VehicleMode) {
+        val charging = mode == ObdPids.VehicleMode.CHARGING_AC ||
+                       mode == ObdPids.VehicleMode.CHARGING_DC
+        if (!charging) {
+            anchor = null
+            return
+        }
+        if (socHmi == null || chargedKwh == null) return
+        val a = anchor
+        if (a == null) {
+            anchor = Anchor(socHmi, chargedKwh)
+            return
+        }
+        val socDelta = socHmi - a.soc
+        val energy = chargedKwh - a.chargedKwh
+        if (socDelta < minSocDeltaPct || energy <= 0f) return
+        val capacity = energy / (socDelta / 100f)
+        if (capacity !in plausibleKwh) return
+        lastResult = ChargeEnergyIntegrator.Result(
+            energyKwhAdded = energy,
+            socDeltaPct = socDelta,
+            apparentCapacityKwh = capacity,
+            timestampMs = t
+        )
+    }
+
+    fun reset() {
+        anchor = null
+        lastResult = null
+    }
+
+    fun lastResult(): ChargeEnergyIntegrator.Result? = lastResult
 }
 
 // ── Thermal trajectory advice ─────────────────────────────────────────────

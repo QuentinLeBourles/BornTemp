@@ -5,11 +5,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-val BornGreen     = Color(0xFF00D4A8)   // legacy teal (kept for compat)
-val BornGreenDim  = Color(0xFF00A882)
-val BornRed       = Color(0xFFFF4D4D)
-val BornAmber     = Color(0xFFF59E0B)
-val BornBlue      = Color(0xFF60A5FA)
 val BornSurface   = Color(0xFF111720)
 val BornBg        = Color(0xFF0A0E14)
 val BornBorder    = Color(0x12FFFFFF)   // 0.07 alpha — softer than the legacy 0x14
@@ -33,19 +28,21 @@ val CobreBorderSoft = Color(0x47B26F47) // 0.28 alpha — borders on cobre-tinte
 val CobreBorderHi   = Color(0x59B26F47) // 0.35 alpha — borders on result card / hi-emphasis
 
 private val DarkColors = darkColorScheme(
-    primary          = BornGreen,
-    onPrimary        = Color(0xFF003028),
-    secondary        = BornGreenDim,
-    onSecondary      = Color.White,
+    primary          = CupraCobre,
+    onPrimary        = BornBg,
+    secondary        = TealOk,
+    onSecondary      = BornBg,
+    tertiary         = AmberHi,
     background       = BornBg,
     surface          = BornSurface,
     onBackground     = BornText,
     onSurface        = BornText,
-    error            = BornRed,
+    error            = RedHi,
     onError          = Color.White,
     outline          = BornBorder,
-    surfaceVariant   = Color(0xFF1A2235),
-    onSurfaceVariant = BornMuted,
+    outlineVariant   = PetrolBorder,
+    surfaceVariant   = PetrolSurface,
+    onSurfaceVariant = BornTextDim,
 )
 
 @Composable
