@@ -198,6 +198,8 @@ data class UiState(
     val pollingIntervalMs: Long = 10_000L,
     /** Poll interval while charging, 5–10 s. */
     val chargingPollingIntervalMs: Long = 5_000L,
+    /** Signal-identification candidates currently enabled (phase 5). */
+    val enabledCandidates: Set<String> = emptySet(),
     val abrp: AbrpUiState = AbrpUiState(),
     val packTypeOverride: PackTypeOverride = PackTypeOverride.AUTO,
     val captureFileUri: android.net.Uri? = null,

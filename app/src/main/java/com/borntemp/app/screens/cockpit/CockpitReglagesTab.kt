@@ -1,5 +1,7 @@
 package com.borntemp.app.screens.cockpit
 
+import com.borntemp.app.domain.CandidateTarget
+import com.borntemp.app.domain.SignalCandidates
 import com.borntemp.app.viewmodel.AcquisitionSetting
 import com.borntemp.app.viewmodel.ConnectionState
 import android.content.Intent
@@ -9,6 +11,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -70,6 +77,13 @@ fun CockpitReglagesTab(
                 // Files are flushed per row, but a live session keeps adding
                 // to them: whatever is shared now is a partial export.
                 sessionActive = uiState.connectionState == ConnectionState.CONNECTED
+            )
+        }
+
+        item {
+            CandidatesCollapsible(
+                enabled = uiState.enabledCandidates,
+                onToggle = { id, on -> onAcquisitionSettingChange(AcquisitionSetting.Candidate(id, on)) },
             )
         }
 
@@ -479,6 +493,61 @@ private fun IntervalChoiceRow(intervals: List<Long>, selectedMs: Long, onSelect:
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Phase-5 signal identification: one switch per candidate request, grouped by
+ * what it's looking for. Raw frames land in TRACE UDS; scans only run at
+ * connection and on each mode change.
+ */
+@Composable
+private fun CandidatesCollapsible(enabled: Set<String>, onToggle: (String, Boolean) -> Unit) {
+    val summary = "${enabled.size}/${SignalCandidates.ALL.size} actifs"
+    CollapsibleCard(label = "IDENTIFICATION SIGNAUX", summary = summary) {
+        Text(
+            "Résultats bruts dans TRACE UDS. Les balayages tournent à la connexion puis à chaque changement de mode.",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 8.sp,
+            color = BornMuted
+        )
+        CandidateTarget.entries.forEach { target ->
+            Spacer(Modifier.height(10.dp))
+            Text(
+                target.label.uppercase(),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 8.sp,
+                letterSpacing = 2.sp,
+                color = BornMuted
+            )
+            SignalCandidates.ALL.filter { it.target == target }.forEach { c ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            c.label,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = BornText
+                        )
+                        Text(
+                            c.hypothesis,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 8.sp,
+                            color = BornTextDim
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = c.id in enabled,
+                        onCheckedChange = { onToggle(c.id, it) }
+                    )
+                }
             }
         }
     }

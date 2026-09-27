@@ -15,7 +15,10 @@ import com.borntemp.app.domain.PollIntervals
 import com.borntemp.app.domain.ReadStatus
 import com.borntemp.app.domain.Reading
 import com.borntemp.app.domain.Signal
+import com.borntemp.app.domain.Cadence
+import com.borntemp.app.domain.CandidateTarget
 import com.borntemp.app.domain.SessionSample
+import com.borntemp.app.domain.SignalCandidates
 import com.borntemp.app.domain.classifyUdsResponse
 import com.borntemp.app.domain.ratePerMin
 import com.borntemp.app.domain.resolvePower
@@ -75,6 +78,8 @@ class ObdSessionController(private val application: Application) {
     /** Samples of the current (or last) charge, for the Session tab. */
     private val chargeSamples = mutableListOf<SessionSample>()
     private var wasCharging = false
+    /** Mode at the last candidate run; a change re-runs the scans. */
+    private var lastCandidateMode: ObdPids.VehicleMode? = null
 
     private val abrpSettings = AbrpSettings(application)
     private val abrpClient = AbrpTelemetryClient()
@@ -92,7 +97,8 @@ class ObdSessionController(private val application: Application) {
                     userToken = abrpSettings.userToken
                 ),
                 packTypeOverride = batterySettings.packTypeOverride,
-                chargingPollingIntervalMs = acquisitionSettings.chargingPollMs
+                chargingPollingIntervalMs = acquisitionSettings.chargingPollMs,
+                enabledCandidates = acquisitionSettings.enabledCandidates
             )
         }
         if (abrpSettings.enabled) locationProvider.start()
@@ -186,6 +192,82 @@ class ObdSessionController(private val application: Application) {
     }
 
     /**
+     * Run the identification candidates due this tick. Every exchange is in the
+     * UDS trace already; this adds one EVENT line per candidate with its
+     * outcome, so the .log reads as a summary. Returns the first good 12 V
+     * reading from a V12 candidate, if any ran.
+     */
+    private suspend fun runCandidates(
+        enabled: Set<String>,
+        slowTick: Boolean,
+        stateChanged: Boolean,
+    ): Reading<Float>? {
+        var v12: Reading<Float>? = null
+        for (c in SignalCandidates.due(enabled, slowTick, stateChanged)) {
+            var ok = 0
+            var failed = 0
+            for (cmd in c.commands) {
+                val r: Reading<Float?> = when (c.ecu) {
+                    "ADAPTER" -> readAdapter(cmd) { ObdPids.parseAtrv(it) }
+                    "SWEEP" -> {
+                        val (ids, pid) = cmd.split(':')
+                        val (req, resp) = ids.split('/')
+                        read(pid, sweepTarget(req, resp)) { it as Any? }.let {
+                            Reading(null, it.status, it.timestampMs, it.detail, it.nrc)
+                        }
+                    }
+                    else -> {
+                        val ecu = ecuByName(c.ecu) ?: continue
+                        read(cmd, ecu) { raw ->
+                            if (c.id == "v12_dcdc_465d") ObdPids.parseDcdcVoltage(raw) else Float.NaN
+                        }
+                    }
+                }
+                if (r.status == ReadStatus.OK) ok++ else failed++
+                if (c.target == CandidateTarget.V12 && r.isOk && v12 == null) {
+                    v12 = Reading.ok(r.value!!, r.timestampMs)
+                }
+            }
+            if (c.cadence != Cadence.FAST) {
+                capture.event("CANDIDAT ${c.id} — ${c.commands.size} requêtes, $ok OK, $failed en échec")
+            }
+        }
+        return v12
+    }
+
+    /** AT command to the adapter itself (no ECU switch), as a Reading. */
+    private suspend fun <T> readAdapter(command: String, parse: (String) -> T?): Reading<T> {
+        val t = System.currentTimeMillis()
+        val resp = try {
+            obdManager.sendCommand(command)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        recordQuery(command, resp)
+        val parsed = resp?.let { runCatching { parse(it) }.getOrNull() }
+        return readingOf(classifyUdsResponse(command, resp), parsed, t)
+    }
+
+    private fun ecuByName(name: String): ObdPids.EcuTarget? = when (name) {
+        "BMS" -> ObdPids.ECU_BMS
+        "EM" -> ObdPids.ECU_EM
+        "DCDC" -> ObdPids.ECU_DCDC
+        "BREG" -> ObdPids.ECU_BATTERY_REG
+        "CHG" -> ObdPids.ECU_CHARGING
+        else -> null
+    }
+
+    /** Ad-hoc target for an address the app doesn't model yet. */
+    private fun sweepTarget(requestId: String, responseId: String) = ObdPids.EcuTarget(
+        name = "ADDR_${requestId.takeLast(2)}",
+        requestHeader = requestId.takeLast(6),
+        responseId = responseId,
+        fullRequestId = requestId,
+    )
+
+    /**
      * Try several ECUs for one DID; first OK reading wins. Used for MEC/EC,
      * whose host is unknown on this Born. When all fail, the last ECU's
      * reading is returned so the status still explains the gap.
@@ -226,6 +308,13 @@ class ObdSessionController(private val application: Application) {
                 val ms = setting.ms.coerceIn(PollIntervals.CHARGING_RANGE)
                 acquisitionSettings.chargingPollMs = ms
                 _uiState.update { it.copy(chargingPollingIntervalMs = ms) }
+            }
+            is AcquisitionSetting.Candidate -> {
+                val next = acquisitionSettings.enabledCandidates.let {
+                    if (setting.enabled) it + setting.id else it - setting.id
+                }
+                acquisitionSettings.enabledCandidates = next
+                _uiState.update { it.copy(enabledCandidates = next) }
             }
         }
     }
@@ -440,6 +529,7 @@ class ObdSessionController(private val application: Application) {
         rateHistory.clear()
         chargeSamples.clear()
         wasCharging = false
+        lastCandidateMode = null
         _uiState.update { it.copy(
             connectionState = ConnectionState.DISCONNECTED,
             batteryData = BatteryData(),
@@ -559,6 +649,7 @@ class ObdSessionController(private val application: Application) {
         var mecR: Reading<Float> = heldReading(Signal.MEC)
         var ecR: Reading<Float> = heldReading(Signal.EC)
         var v12R: Reading<Float> = heldReading(Signal.V_12)
+        var v12FreshFromEm = false
         var lifetimeR: Reading<Pair<Float?, Float?>> = heldReading(Signal.LIFETIME_ENERGY)
 
         if (isSlowTick) {
@@ -579,6 +670,7 @@ class ObdSessionController(private val application: Application) {
                 ecR = readFirstOk(ObdPids.PID_EC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
                     ObdPids.ECU_BATTERY_REG) { ObdPids.parseEnergyKwh(it) }
                 v12R = read(ObdPids.PID_12V_VIA_EM, ObdPids.ECU_EM) { ObdPids.parse12vVoltageEm(it) }
+                v12FreshFromEm = v12R.isOk
                 if (!mecR.isOk && !ecR.isOk && !v12R.isOk) {
                     energyDidMisses++
                     if (energyDidMisses == MUTE_ENERGY_DIDS_AFTER) {
@@ -603,6 +695,16 @@ class ObdSessionController(private val application: Application) {
             }
             lifetimeR = freshLifetime
         }
+
+        // ── Phase-5 identification candidates ───────────────────────────
+        // Raw frames go to the UDS trace; only the 12 V sources feed a value,
+        // as fallbacks while EM 2AF7 stays silent (it always has).
+        val stateChanged = vehicleMode != lastCandidateMode
+        lastCandidateMode = vehicleMode
+        val v12Fallback = runCandidates(_uiState.value.enabledCandidates, isSlowTick, stateChanged)
+        // A held reading must not block a fresh one: only a value EM returned
+        // this very tick outranks the fallbacks.
+        if (!v12FreshFromEm && v12Fallback != null) v12R = v12Fallback
 
         val coolantIn = coolantR.value?.first
         val coolantOut = coolantR.value?.second
