@@ -1,5 +1,10 @@
 package com.borntemp.app.viewmodel
 
+import com.borntemp.app.domain.PowerReading
+import com.borntemp.app.domain.Reading
+import com.borntemp.app.domain.SessionSummary
+import com.borntemp.app.domain.ThermalMetrics
+import com.borntemp.app.domain.Signal
 import com.borntemp.app.obd.ObdPids
 
 /**
@@ -45,6 +50,10 @@ data class BatteryData(
     val vehicleMode: ObdPids.VehicleMode = ObdPids.VehicleMode.UNKNOWN,
     val volt12v: Float? = null,            // 12V control module voltage
     val chargeState: ChargeState = ChargeState.UNKNOWN,
+    /** Per-signal acquisition outcome: every null field above has its reason here. */
+    val readings: Map<Signal, Reading<*>> = emptyMap(),
+    /** Phase-4 derived metrics for this tick. */
+    val derived: DerivedSnapshot = DerivedSnapshot(),
     val timestamp: Long = 0L
 )
 
@@ -185,13 +194,21 @@ data class UiState(
     val errorMessage: String? = null,
     val logEntries: List<LogEntry> = emptyList(),
     val isPolling: Boolean = false,
-    val pollingIntervalMs: Long = 5000L,
+    /** Poll interval outside charge (driving / standby). */
+    val pollingIntervalMs: Long = 10_000L,
+    /** Poll interval while charging, 5–10 s. */
+    val chargingPollingIntervalMs: Long = 5_000L,
+    /** Signal-identification candidates currently enabled (phase 5). */
+    val enabledCandidates: Set<String> = emptySet(),
     val abrp: AbrpUiState = AbrpUiState(),
     val packTypeOverride: PackTypeOverride = PackTypeOverride.AUTO,
     val captureFileUri: android.net.Uri? = null,
     val captureFileName: String? = null,
     val sohHistoryFileUri: android.net.Uri? = null,
     val sohHistoryFileName: String? = null,
+    val udsTraceFileUri: android.net.Uri? = null,
+    /** Current charge, or the last one once it ended; null before any. */
+    val chargeSummary: SessionSummary? = null,
     val chargeProjection: ChargeProjection = ChargeProjection(),
     val thermalTrajectory: ThermalTrajectory = ThermalTrajectory(
         slopeCPerMin = null,
@@ -276,3 +293,13 @@ enum class TempClass(val label: String, val emoji: String) {
     HOT("Très chaude", "🔴"),
     CRITICAL_HOT("Critique - Surchauffe", "🔴")
 }
+
+/** Derived metrics computed each tick from the readings (see domain/DerivedMetrics.kt). */
+data class DerivedSnapshot(
+    val thermal: ThermalMetrics = ThermalMetrics(null, null, null, null),
+    val tMaxRatePerMin: Float? = null,
+    val socRatePerMin: Float? = null,
+    /** Measured V×I, else estimated from the SOC slope — see [PowerReading.source]. */
+    val power: PowerReading? = null,
+)
+

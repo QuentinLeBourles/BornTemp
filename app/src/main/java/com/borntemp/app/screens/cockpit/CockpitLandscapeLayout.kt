@@ -1,5 +1,6 @@
 package com.borntemp.app.screens.cockpit
 
+import com.borntemp.app.viewmodel.AcquisitionSetting
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
@@ -38,6 +39,7 @@ fun CockpitLandscapeLayout(
     onOpenTrend: () -> Unit,
     onOpenErrorDetail: () -> Unit,
     onPollingIntervalChange: (Long) -> Unit,
+    onAcquisitionSettingChange: (AcquisitionSetting) -> Unit,
     onAbrpEnabledChange: (Boolean) -> Unit,
     onAbrpApiKeyChange: (String) -> Unit,
     onAbrpUserTokenChange: (String) -> Unit,
@@ -128,6 +130,7 @@ fun CockpitLandscapeLayout(
                     CockpitTab.REGLAGES -> CockpitReglagesTab(
                         uiState = uiState,
                         onPollingIntervalChange = onPollingIntervalChange,
+                        onAcquisitionSettingChange = onAcquisitionSettingChange,
                         onAbrpEnabledChange = onAbrpEnabledChange,
                         onAbrpApiKeyChange = onAbrpApiKeyChange,
                         onAbrpUserTokenChange = onAbrpUserTokenChange,

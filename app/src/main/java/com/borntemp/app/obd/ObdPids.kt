@@ -339,6 +339,23 @@ object ObdPids {
     }
 
     /** 12V from EM module DID 2AF7: `(B0*256+B1)/1024 + 4.26` V. */
+    /** 12 V bus from the DC-DC converter, DCDC 22465D: `raw / 512` V.
+     *  Probe 2026-09-26: 0x1CDA → 14.43 V with ATRV reading 14.0 V. */
+    fun parseDcdcVoltage(response: String): Float? {
+        val hex = extractUdsDataHex(response) ?: return null
+        if (hex.length < 4) return null
+        val v = (hex.substring(0, 4).toIntOrNull(16) ?: return null) / 512f
+        return v.takeIf { it in V12_PLAUSIBLE }
+    }
+
+    /** Adapter-measured OBD pin 16 voltage, `ATRV` → e.g. "14.0V". */
+    fun parseAtrv(response: String): Float? =
+        Regex("(\\d{1,2}(?:[.,]\\d{1,2})?)\\s*V", RegexOption.IGNORE_CASE).find(response)
+            ?.groupValues?.get(1)?.replace(',', '.')?.toFloatOrNull()
+            ?.takeIf { it in V12_PLAUSIBLE }
+
+    private val V12_PLAUSIBLE = 8f..16.5f
+
     fun parse12vVoltageEm(response: String): Float? {
         val hex = extractUdsDataHex(response) ?: return null
         if (hex.length < 4) return null

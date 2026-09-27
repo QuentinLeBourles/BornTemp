@@ -261,4 +261,18 @@ class ObdPidsTest {
         assertNull(ObdPids.parseEnergyKwh("17FE001003 7F2231"))
         assertEquals(ObdPids.VehicleMode.UNKNOWN, ObdPids.parseVehicleMode("NO DATA"))
     }
+
+    @Test
+    fun `DCDC 465D decodes the 12 V bus from the 2026-09-26 probe`() {
+        assertEquals(14.43f, ObdPids.parseDcdcVoltage("17FE00B90562465D1CDA")!!, 0.01f)
+        assertNull(ObdPids.parseDcdcVoltage("17FE00B9037F2231"))
+    }
+
+    @Test
+    fun `ATRV parses the adapter voltage and rejects nonsense`() {
+        assertEquals(14.0f, ObdPids.parseAtrv("14.0V")!!, 0.001f)
+        assertEquals(12.6f, ObdPids.parseAtrv("12,6V")!!, 0.001f)
+        assertNull(ObdPids.parseAtrv("?"))
+        assertNull(ObdPids.parseAtrv("0.2V"))
+    }
 }

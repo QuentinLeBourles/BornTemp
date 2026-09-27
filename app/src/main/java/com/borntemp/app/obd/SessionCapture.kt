@@ -4,6 +4,10 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import androidx.core.content.FileProvider
+import com.borntemp.app.domain.Reading
+import com.borntemp.app.domain.Signal
+import com.borntemp.app.domain.UdsResult
+import com.borntemp.app.domain.statusCell
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -20,6 +24,10 @@ import java.util.Locale
  *   - `borntemp_<ts>.log`        — full per-frame trace (init/PID/event)
  *   - `borntemp_soh_<ts>.csv`    — one row per "reliable" SOH sample,
  *                                  for trending across sessions in a sheet
+ *   - `borntemp_uds_<ts>.csv`    — one row per adapter exchange (ECU, DID,
+ *                                  CAN frame sent, raw reply, latency,
+ *                                  OK / NRC code / timeout): the debug trace,
+ *                                  kept apart from the measurement CSV
  *
  * Failures (no external storage, IO errors) are swallowed — capture must never
  * break OBD polling.
@@ -36,9 +44,39 @@ class SessionCapture(private val context: Context) {
     private var sohFile: File? = null
     private var sohWriter: BufferedWriter? = null
 
+    private var udsFile: File? = null
+    private var udsWriter: BufferedWriter? = null
+
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val nameFormat = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+    private val isoMsFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+
+    companion object {
+        /** CSV status column → the signal it reports on. */
+        val STATUS_COLUMNS: List<Pair<String, Signal>> = listOf(
+            "soc_bms_status" to Signal.SOC_BMS,
+            "t_min_status" to Signal.T_MIN,
+            "t_max_status" to Signal.T_MAX,
+            "coolant_status" to Signal.COOLANT,
+            "pump_status" to Signal.PUMP,
+            "mode_status" to Signal.MODE,
+            "v_hv_status" to Signal.V_HV,
+            "i_hv_status" to Signal.I_HV,
+            "mec_status" to Signal.MEC,
+            "ec_status" to Signal.EC,
+            "v_12_status" to Signal.V_12,
+        )
+
+        const val UDS_HEADER =
+            "iso_time,unix_ms,ecu,command,tx_frame,rx_raw,latency_ms,status,nrc,detail\n"
+
+        /** RFC 4180 quoting — multi-frame replies carry spaces, and a stray
+         *  comma from a garbled ELM line must not shift the columns. */
+        fun csvCell(v: String): String =
+            if (v.any { it == ',' || it == '"' || it == '\n' }) "\"" + v.replace("\"", "\"\"") + "\""
+            else v
+    }
 
     /**
      * Open a fresh capture file under getExternalFilesDir/Download/ and write
@@ -62,6 +100,7 @@ class SessionCapture(private val context: Context) {
             file = target
             writer = w
             startSoh(base, stamp)
+            startUds(base, stamp)
             target
         } catch (_: Exception) {
             file = null
@@ -79,7 +118,10 @@ class SessionCapture(private val context: Context) {
             w.write("iso_time,unix_ms,mec_kwh,ec_kwh,soc_hmi_pct,soc_bms_pct," +
                     "t_min_c,t_max_c,t_avg_c,t_coolant_in_c,t_coolant_out_c," +
                     "pump_pct,vehicle_mode,soh_pct,confidence," +
-                    "v_hv_v,i_hv_a,p_kw\n")
+                    "v_hv_v,i_hv_a,p_kw," +
+                    // Appended, never inserted: SohHistory reads by header
+                    // name, and older files must keep parsing.
+                    "v_12v," + STATUS_COLUMNS.joinToString(",") { it.first } + ",p_kw_source\n")
             w.flush()
             sohFile = target
             sohWriter = w
@@ -87,6 +129,51 @@ class SessionCapture(private val context: Context) {
             sohFile = null
             sohWriter = null
         }
+    }
+
+    private fun startUds(base: File, stamp: String) {
+        val target = File(base, "borntemp_uds_$stamp.csv")
+        try {
+            val w = BufferedWriter(FileWriter(target, /* append = */ false))
+            w.write(UDS_HEADER)
+            w.flush()
+            udsFile = target
+            udsWriter = w
+        } catch (_: Exception) {
+            udsFile = null
+            udsWriter = null
+        }
+    }
+
+    /** Append one exchange to the UDS trace. Flushed per row: the trace is
+     *  most useful exactly when a session ends badly. Synchronized: the
+     *  transport calls it from whichever coroutine issued the command. */
+    @Synchronized
+    fun uds(
+        timestampMs: Long,
+        ecu: String?,
+        command: String,
+        txFrame: String,
+        response: String?,
+        latencyMs: Long,
+        result: UdsResult,
+    ) {
+        val w = udsWriter ?: return
+        val row = listOf(
+            isoMsFormat.format(Date(timestampMs)),
+            timestampMs.toString(),
+            ecu.orEmpty(),
+            command,
+            txFrame,
+            response?.replace("\r".toRegex(), " ")?.replace(">", "")?.trim().orEmpty(),
+            latencyMs.toString(),
+            result.status.name,
+            result.nrc?.let { "%02X".format(it) }.orEmpty(),
+            result.detail.orEmpty(),
+        ).joinToString(",") { csvCell(it) }
+        try {
+            w.write(row); w.write("\n"); w.flush()
+        } catch (_: Exception) { /* fail open */ }
     }
 
     fun init(cmd: String, response: String?) {
@@ -122,6 +209,9 @@ class SessionCapture(private val context: Context) {
         voltageHv: Float? = null,
         currentHv: Float? = null,
         powerKw: Float? = null,
+        volt12v: Float? = null,
+        powerSource: String? = null,
+        readings: Map<Signal, Reading<*>> = emptyMap(),
     ) {
         val w = sohWriter ?: return
         // Locale.US is not cosmetic here: the default locale on this phone is
@@ -149,7 +239,18 @@ class SessionCapture(private val context: Context) {
             append(confidence ?: "");                     append(',')
             append(f(voltageHv, 2));                      append(',')
             append(f(currentHv, 2));                      append(',')
-            append(f(powerKw, 3));                        append('\n')
+            append(f(powerKw, 3));                        append(',')
+            append(f(volt12v, 2))
+            // One status per acquired value: an empty cell above is never
+            // unexplained. Derived columns (soc_hmi, t_avg, p_kw) inherit
+            // the statuses of their inputs.
+            for ((_, signal) in STATUS_COLUMNS) {
+                append(','); append(statusCell(readings[signal]))
+            }
+            // MEASURED (V×I) or ESTIMATED (SOC slope): p_kw is never
+            // presented as a measurement it isn't.
+            append(','); append(powerSource.orEmpty())
+            append('\n')
         }
         try {
             w.write(row)
@@ -162,6 +263,18 @@ class SessionCapture(private val context: Context) {
 
     /** content:// URI for the per-session SOH CSV history. */
     fun shareSohUri(): Uri? = uriFor(sohFile)
+
+    /** content:// URI for the UDS debug trace. */
+    fun shareUdsUri(): Uri? = uriFor(udsFile)
+
+    /** Push buffered rows to disk without ending the session — called when
+     *  the app leaves the foreground, where the process may be killed. */
+    @Synchronized
+    fun flush() {
+        for (w in listOf(writer, sohWriter, udsWriter)) {
+            try { w?.flush() } catch (_: Exception) { /* fail open */ }
+        }
+    }
 
     fun currentFile(): File? = file
     fun currentSohFile(): File? = sohFile
@@ -179,6 +292,10 @@ class SessionCapture(private val context: Context) {
             try { w.flush(); w.close() } catch (_: Exception) { /* fail open */ }
         }
         sohWriter = null
+        udsWriter?.let { w ->
+            try { w.flush(); w.close() } catch (_: Exception) { /* fail open */ }
+        }
+        udsWriter = null
     }
 
     private fun uriFor(f: File?): Uri? {

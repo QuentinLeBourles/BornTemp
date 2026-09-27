@@ -30,6 +30,8 @@ local.properties
 session-pulls/
 *.log
 borntemp_*.csv
+# Test fixtures are real captures on purpose (replay tests).
+!app/src/test/resources/borntemp_*.csv
 
 # ── OS noise ────────────────────────────────────────────────────────────
 .DS_Store
