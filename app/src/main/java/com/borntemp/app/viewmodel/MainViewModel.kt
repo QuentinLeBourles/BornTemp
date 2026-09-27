@@ -23,6 +23,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setPackTypeOverride(override: PackTypeOverride) = controller.setPackTypeOverride(override)
     fun setPollingInterval(ms: Long) = controller.setPollingInterval(ms)
+    fun applyAcquisitionSetting(setting: AcquisitionSetting) = controller.applyAcquisitionSetting(setting)
     fun setAbrpApiKey(key: String) = controller.setAbrpApiKey(key)
     fun setAbrpUserToken(token: String) = controller.setAbrpUserToken(token)
     fun setAbrpEnabled(enabled: Boolean) = controller.setAbrpEnabled(enabled)

@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
                     onDisconnect = { viewModel.disconnect() },
                     onRefresh = { viewModel.refreshNow() },
                     onPollingIntervalChange = { viewModel.setPollingInterval(it) },
+                    onAcquisitionSettingChange = { viewModel.applyAcquisitionSetting(it) },
                     onAbrpEnabledChange = { enabled ->
                         if (enabled &&
                             ContextCompat.checkSelfPermission(

@@ -1,5 +1,6 @@
 package com.borntemp.app.screens.cockpit
 
+import com.borntemp.app.viewmodel.AcquisitionSetting
 import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
@@ -45,6 +46,7 @@ import java.util.Locale
 fun CockpitReglagesTab(
     uiState: UiState,
     onPollingIntervalChange: (Long) -> Unit,
+    onAcquisitionSettingChange: (AcquisitionSetting) -> Unit,
     onAbrpEnabledChange: (Boolean) -> Unit,
     onAbrpApiKeyChange: (String) -> Unit,
     onAbrpUserTokenChange: (String) -> Unit,
@@ -69,7 +71,9 @@ fun CockpitReglagesTab(
         item {
             SettingsCollapsible(
                 pollingIntervalMs = uiState.pollingIntervalMs,
+                chargingPollingIntervalMs = uiState.chargingPollingIntervalMs,
                 onPollingIntervalChange = onPollingIntervalChange,
+                onAcquisitionSettingChange = onAcquisitionSettingChange,
                 abrp = uiState.abrp,
                 onAbrpEnabledChange = onAbrpEnabledChange,
                 onAbrpApiKeyChange = onAbrpApiKeyChange,
@@ -274,7 +278,9 @@ private fun ExportButton(
 @Composable
 private fun SettingsCollapsible(
     pollingIntervalMs: Long,
+    chargingPollingIntervalMs: Long,
     onPollingIntervalChange: (Long) -> Unit,
+    onAcquisitionSettingChange: (AcquisitionSetting) -> Unit,
     abrp: AbrpUiState,
     onAbrpEnabledChange: (Boolean) -> Unit,
     onAbrpApiKeyChange: (String) -> Unit,
@@ -282,44 +288,36 @@ private fun SettingsCollapsible(
     packTypeOverride: PackTypeOverride,
     onPackTypeOverrideChange: (PackTypeOverride) -> Unit
 ) {
-    val summary = "${pollingIntervalMs / 1000} s · ABRP ${if (abrp.enabled) "on" else "off"}"
+    val summary = "${chargingPollingIntervalMs / 1000} s charge · ${pollingIntervalMs / 1000} s roulage · ABRP ${if (abrp.enabled) "on" else "off"}"
     CollapsibleCard(label = "RÉGLAGES", summary = summary) {
         // Polling
         Text(
-            "VITESSE DE RELEVÉ",
+            "RELEVÉ EN CHARGE",
             fontFamily = FontFamily.Monospace,
             fontSize = 8.sp,
             letterSpacing = 2.sp,
             color = BornMuted
         )
         Spacer(Modifier.height(6.dp))
-        val intervals = listOf(2000L, 5000L, 10000L, 30000L)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            intervals.forEach { ms ->
-                val selected = pollingIntervalMs == ms
-                OutlinedButton(
-                    onClick = { onPollingIntervalChange(ms) },
-                    shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(
-                        0.5.dp,
-                        if (selected) CupraCobre else BornBorder
-                    ),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = if (selected) CupraSheen else BornTextDim,
-                        containerColor = if (selected) CupraCobre.copy(alpha = 0.16f) else Color.Transparent
-                    ),
-                    contentPadding = PaddingValues(vertical = 7.dp, horizontal = 4.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        "${ms / 1000} s",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
+        IntervalChoiceRow(
+            intervals = listOf(5000L, 7000L, 10000L),
+            selectedMs = chargingPollingIntervalMs,
+            onSelect = { onAcquisitionSettingChange(AcquisitionSetting.ChargingPollInterval(it)) },
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "RELEVÉ HORS CHARGE",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 8.sp,
+            letterSpacing = 2.sp,
+            color = BornMuted
+        )
+        Spacer(Modifier.height(6.dp))
+        IntervalChoiceRow(
+            intervals = listOf(5000L, 10000L, 30000L, 60000L),
+            selectedMs = pollingIntervalMs,
+            onSelect = onPollingIntervalChange,
+        )
 
         Spacer(Modifier.height(14.dp))
 
@@ -421,5 +419,36 @@ private fun SettingsCollapsible(
                 .fillMaxWidth()
                 .padding(top = 8.dp)
         )
+    }
+}
+
+/** One row of interval choices, the selected one highlighted in copper. */
+@Composable
+private fun IntervalChoiceRow(intervals: List<Long>, selectedMs: Long, onSelect: (Long) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        intervals.forEach { ms ->
+            val selected = selectedMs == ms
+            OutlinedButton(
+                onClick = { onSelect(ms) },
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(
+                    0.5.dp,
+                    if (selected) CupraCobre else BornBorder
+                ),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (selected) CupraSheen else BornTextDim,
+                    containerColor = if (selected) CupraCobre.copy(alpha = 0.16f) else Color.Transparent
+                ),
+                contentPadding = PaddingValues(vertical = 7.dp, horizontal = 4.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    "${ms / 1000} s",
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
     }
 }

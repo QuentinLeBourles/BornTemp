@@ -10,7 +10,14 @@ import com.borntemp.app.abrp.AbrpSettings
 import com.borntemp.app.abrp.AbrpTelemetryClient
 import com.borntemp.app.abrp.LocationProvider
 import com.borntemp.app.obd.BluetoothObdManager
+import com.borntemp.app.domain.PidPolicy
+import com.borntemp.app.domain.PollIntervals
+import com.borntemp.app.domain.ReadStatus
+import com.borntemp.app.domain.Reading
+import com.borntemp.app.domain.Signal
 import com.borntemp.app.domain.classifyUdsResponse
+import com.borntemp.app.domain.readingOf
+import com.borntemp.app.domain.shouldRetry
 import com.borntemp.app.domain.udsTxFrame
 import com.borntemp.app.obd.ChargeSessionLogger
 import com.borntemp.app.obd.MonitoredDeviceStore
@@ -19,6 +26,7 @@ import com.borntemp.app.obd.ObdPids
 import com.borntemp.app.obd.SessionCapture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -58,6 +66,7 @@ class ObdSessionController(private val application: Application) {
     private val abrpClient = AbrpTelemetryClient()
     private val locationProvider = LocationProvider(application)
     private val batterySettings = BatterySettings(application)
+    private val acquisitionSettings = AcquisitionSettings(application)
     private val monitoredDeviceStore = MonitoredDeviceStore(application)
 
     init {
@@ -68,7 +77,8 @@ class ObdSessionController(private val application: Application) {
                     apiKey = abrpSettings.apiKey,
                     userToken = abrpSettings.userToken
                 ),
-                packTypeOverride = batterySettings.packTypeOverride
+                packTypeOverride = batterySettings.packTypeOverride,
+                chargingPollingIntervalMs = acquisitionSettings.chargingPollMs
             )
         }
         if (abrpSettings.enabled) locationProvider.start()
@@ -126,45 +136,58 @@ class ObdSessionController(private val application: Application) {
         return resp
     }
 
+    /** Raw text of the last [read], for diagnostics that need the frame. */
+    private var lastRawResponse: String? = null
+
     /**
-     * Read one extreme-cell DID (1E33 max / 1E34 min). One round-trip now
-     * yields both the voltage and the cell index — the frame always carried
-     * both, so the follow-up read of `1E40 + (idx-1)` is gone.
-     *
-     * Still traces its failures: the card showing "--" used to say nothing
-     * about which link broke.
+     * Acquire one PID as a [Reading]. Never throws and never blocks longer than
+     * the policy's timeout per attempt, so a failing PID can't stall the cycle.
+     * Retries on TIMEOUT only (see [shouldRetry]); an NRC is final.
      */
-    private suspend fun readCellExtreme(pid: String, label: String): ObdPids.CellExtreme? {
-        val raw = queryOn(pid, ObdPids.ECU_BMS)
-        if (raw == null) {
-            capture.event("CELL $label ($pid) — aucune réponse")
-            return null
+    private suspend fun <T> read(
+        pid: String,
+        ecu: ObdPids.EcuTarget,
+        policy: PidPolicy = PidPolicy.FAST,
+        parse: (String) -> T?,
+    ): Reading<T> {
+        var attempt = 0
+        while (true) {
+            val t = System.currentTimeMillis()
+            val resp = try {
+                obdManager.sendCommand(pid, ecu, policy.timeoutMs)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            recordQuery("${ecu.name}:$pid", resp)
+            lastRawResponse = resp
+            val result = classifyUdsResponse(pid, resp)
+            val parsed = if (result.status == ReadStatus.OK && resp != null) {
+                runCatching { parse(resp) }.getOrNull()
+            } else null
+            val reading = readingOf(result, parsed, t)
+            if (!shouldRetry(reading.status, attempt, policy)) return reading
+            attempt++
         }
-        val cell = ObdPids.parseCellExtreme(raw)
-        if (cell == null) {
-            capture.event("CELL $label ($pid) — trame non décodée: ${raw.trim()}")
-            return null
-        }
-        return cell
     }
 
     /**
-     * Try several ECUs for an energy DID and return the first that parses to
-     * a plausible kWh value. Used as a runtime fallback for MEC/EC since the
-     * documented EM module 0x10 is silent on this Born — it lets the app
-     * survive a CSV mis-attribution without code changes the day we find
-     * the right host.
+     * Try several ECUs for one DID; first OK reading wins. Used for MEC/EC,
+     * whose host is unknown on this Born. When all fail, the last ECU's
+     * reading is returned so the status still explains the gap.
      */
-    private suspend fun queryAnyEnergy(
+    private suspend fun <T> readFirstOk(
         pid: String,
-        vararg ecus: ObdPids.EcuTarget
-    ): Float? {
+        vararg ecus: ObdPids.EcuTarget,
+        parse: (String) -> T?,
+    ): Reading<T> {
+        var last: Reading<T> = Reading.notSupported(System.currentTimeMillis())
         for (e in ecus) {
-            val resp = queryOn(pid, e) ?: continue
-            val kwh = ObdPids.parseEnergyKwh(resp) ?: continue
-            return kwh
+            last = read(pid, e, parse = parse)
+            if (last.isOk) return last
         }
-        return null
+        return last
     }
 
     private fun recordQuery(label: String, resp: String?) {
@@ -182,6 +205,25 @@ class ObdSessionController(private val application: Application) {
     fun setPollingInterval(ms: Long) {
         val clamped = ms.coerceIn(MIN_POLL_MS, MAX_POLL_MS)
         _uiState.update { it.copy(pollingIntervalMs = clamped) }
+    }
+
+    fun applyAcquisitionSetting(setting: AcquisitionSetting) {
+        when (setting) {
+            is AcquisitionSetting.ChargingPollInterval -> {
+                val ms = setting.ms.coerceIn(PollIntervals.CHARGING_RANGE)
+                acquisitionSettings.chargingPollMs = ms
+                _uiState.update { it.copy(chargingPollingIntervalMs = ms) }
+            }
+        }
+    }
+
+    /** Interval for the next tick: 5–10 s while charging, the user's
+     *  (looser) interval otherwise. */
+    private fun currentPollIntervalMs(): Long {
+        val st = _uiState.value
+        val charging = st.batteryData.chargeState == ChargeState.AC_CHARGING ||
+                       st.batteryData.chargeState == ChargeState.DC_CHARGING
+        return PollIntervals(st.chargingPollingIntervalMs, st.pollingIntervalMs).forMode(charging)
     }
 
     // ── ABRP settings ───────────────────────────────────────────────────────
@@ -403,8 +445,15 @@ class ObdSessionController(private val application: Application) {
         pollingJob = scope.launch {
             _uiState.update { it.copy(isPolling = true) }
             while (isActive && obdManager.isConnected) {
-                readAllData()
-                delay(_uiState.value.pollingIntervalMs)
+                // A throwing tick must not end the session: log it and poll on.
+                try {
+                    readAllData()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    capture.event("Tick en échec: ${e.javaClass.simpleName}: ${e.message}")
+                }
+                delay(currentPollIntervalMs())
             }
             if (!obdManager.isConnected) {
                 log("Connexion perdue.", LogLevel.ERROR)
@@ -435,91 +484,81 @@ class ObdSessionController(private val application: Application) {
         pollCounter++
         val previous = _uiState.value.batteryData
         val now = System.currentTimeMillis()
-        val pollMs = _uiState.value.pollingIntervalMs
+        val pollMs = currentPollIntervalMs()
 
         // ── BMS fast block ────────────────────────────────────────────────
-        // First request of the tick: after ~40 min the BMS starts dropping it
-        // with NO DATA (168 of 750 on 2026-09-26 19:13, never another PID), and
-        // an immediate second try answers. One retry, only for this one.
-        val packTempMax = (queryOn(ObdPids.PID_PACK_TEMP_MAX, ObdPids.ECU_BMS)
-            ?.let { ObdPids.parsePackTemp(it) }
-            ?: queryOn(ObdPids.PID_PACK_TEMP_MAX, ObdPids.ECU_BMS)
-                ?.let { ObdPids.parsePackTemp(it) })
-        val packTempMin = queryOn(ObdPids.PID_PACK_TEMP_MIN, ObdPids.ECU_BMS)
-            ?.let { ObdPids.parsePackTemp(it) }
-        val socBms = queryOn(ObdPids.PID_SOC_BMS, ObdPids.ECU_BMS)
-            ?.let { ObdPids.parseSocBms(it) }
-        val socDisplay = ObdPids.bmsSocToDisplay(socBms)
-        val voltage = queryOn(ObdPids.PID_PACK_VOLTAGE, ObdPids.ECU_BMS)
-            ?.let { ObdPids.parsePackVoltage(it) }
+        // Every read yields a Reading: a value, or the status saying why not.
+        // T max is the first request of the tick: after ~40 min the BMS starts
+        // dropping it with NO DATA (168 of 750 on 2026-09-26 19:13, never
+        // another PID), so it alone gets one retry.
+        val tMaxR = read(ObdPids.PID_PACK_TEMP_MAX, ObdPids.ECU_BMS,
+            PidPolicy(timeoutMs = PidPolicy.FAST.timeoutMs, retries = 1)) { ObdPids.parsePackTemp(it) }
+        val tMinR = read(ObdPids.PID_PACK_TEMP_MIN, ObdPids.ECU_BMS) { ObdPids.parsePackTemp(it) }
+        val socBmsR = read(ObdPids.PID_SOC_BMS, ObdPids.ECU_BMS) { ObdPids.parseSocBms(it) }
+        val voltageR = read(ObdPids.PID_PACK_VOLTAGE, ObdPids.ECU_BMS) { ObdPids.parsePackVoltage(it) }
         // BMS sign convention confirmed in the field 2026-06-21 13:31 log:
-        // car parked in DRIVING mode reported +4.6 A — that's the DC-DC
-        // converter pulling 12V from the HV pack, i.e. discharge. So the
-        // raw value's + = OUT of pack. We flip here so the rest of the
-        // codebase (LivePowerChip, ABRP, ChargeAnalytics, CSV) uses the
-        // "driver mental model": + into pack (charge / regen), − out.
-        val currentNow = queryOn(ObdPids.PID_PACK_CURRENT, ObdPids.ECU_BMS)
-            ?.let { ObdPids.parsePackCurrent(it)?.let { raw -> -raw } }
+        // raw + = OUT of pack. We flip here so the rest of the codebase uses
+        // the "driver mental model": + into pack (charge / regen), − out.
+        // parsePackCurrent returns null until 1E3C is decoded, so this reads
+        // as PARSE_ERROR — the frame still lands in the UDS trace.
+        val currentR = read(ObdPids.PID_PACK_CURRENT, ObdPids.ECU_BMS) {
+            ObdPids.parsePackCurrent(it)?.let { raw -> -raw }
+        }
+        val packTempMax = tMaxR.value
+        val packTempMin = tMinR.value
+        val socBms = socBmsR.value
+        val socDisplay = ObdPids.bmsSocToDisplay(socBms)
+        val voltage = voltageR.value
+        val currentNow = currentR.value
 
         // ── Vehicle mode + pump (fast — affects state + thermal) ────────
-        val vehicleModeRaw = queryOn(ObdPids.PID_VEHICLE_MODE, ObdPids.ECU_BMS)
-        val vehicleMode = vehicleModeRaw
-            ?.let { ObdPids.parseVehicleMode(it) } ?: previous.vehicleMode
-        // parseVehicleMode only maps 0/1/4/6 and never returns null, so a code
-        // we don't know overwrites the previous state with UNKNOWN and hides an
-        // active charge. Trace the frame rather than guess a mapping — once per
-        // distinct raw value, so a persistent unknown doesn't flood the log.
-        if (vehicleMode == ObdPids.VehicleMode.UNKNOWN && vehicleModeRaw != null &&
-            vehicleModeRaw != lastUnknownModeRaw) {
-            lastUnknownModeRaw = vehicleModeRaw
-            capture.event("VEHICLE_MODE non mappé (7448) — trame: ${vehicleModeRaw.trim()}")
+        val modeR = read(ObdPids.PID_VEHICLE_MODE, ObdPids.ECU_BMS) {
+            ObdPids.parseVehicleMode(it).takeUnless { m -> m == ObdPids.VehicleMode.UNKNOWN }
         }
-        val pumpPct = queryOn(ObdPids.PID_COOLANT_PUMP, ObdPids.ECU_BMS)
-            ?.let { ObdPids.parseCoolantPump(it) } ?: previous.coolantPumpPct
+        val vehicleMode = modeR.value ?: previous.vehicleMode
+        // An unmapped 7448 code reads as PARSE_ERROR; trace the frame rather
+        // than guess a mapping — once per distinct raw value.
+        if (modeR.status == ReadStatus.PARSE_ERROR && lastRawResponse != lastUnknownModeRaw) {
+            lastUnknownModeRaw = lastRawResponse
+            capture.event("VEHICLE_MODE non mappé (7448) — trame: ${lastRawResponse?.trim()}")
+        }
+        val pumpR = read(ObdPids.PID_COOLANT_PUMP, ObdPids.ECU_BMS) { ObdPids.parseCoolantPump(it) }
+        val pumpPct = pumpR.value ?: previous.coolantPumpPct
 
         // ── Slow block ────────────────────────────────────────────────────
-        var mecKwh = previous.mecKwh
-        var ecKwh = previous.ecKwh
-        var volt12v = previous.volt12v
-        var lifetimeChargeKwh = previous.lifetimeChargeKwh
-        var lifetimeDischargeKwh = previous.lifetimeDischargeKwh
-        var coolantIn = previous.coolantTempIn
-        var coolantOut = previous.coolantTempOut
-        var cellMinIdx = previous.cellVoltMinIdx
-        var cellMaxIdx = previous.cellVoltMaxIdx
-        var cellMinMv = previous.cellVoltMinMv
-        var cellMaxMv = previous.cellVoltMaxMv
+        // Off-tick, slow signals keep their last reading (and its timestamp).
+        val held = previous.readings
+        fun <T> heldReading(sig: Signal): Reading<T> {
+            @Suppress("UNCHECKED_CAST")
+            return (held[sig] as Reading<T>?) ?: Reading.notSupported(now, "pas encore lu")
+        }
+        var coolantR: Reading<Pair<Float?, Float?>> = heldReading(Signal.COOLANT)
+        var cellMinR: Reading<ObdPids.CellExtreme> = heldReading(Signal.CELL_MIN)
+        var cellMaxR: Reading<ObdPids.CellExtreme> = heldReading(Signal.CELL_MAX)
+        var mecR: Reading<Float> = heldReading(Signal.MEC)
+        var ecR: Reading<Float> = heldReading(Signal.EC)
+        var v12R: Reading<Float> = heldReading(Signal.V_12)
+        var lifetimeR: Reading<Pair<Float?, Float?>> = heldReading(Signal.LIFETIME_ENERGY)
 
         if (isSlowTick) {
-            coolantIn = null; coolantOut = null
-            queryOn(ObdPids.PID_COOLANT_TEMPS, ObdPids.ECU_BMS)?.let {
-                val (ci, co) = ObdPids.parseCoolantTemps(it)
-                coolantIn = ci; coolantOut = co
+            coolantR = read(ObdPids.PID_COOLANT_TEMPS, ObdPids.ECU_BMS) {
+                ObdPids.parseCoolantTemps(it).takeIf { (ci, co) -> ci != null || co != null }
             }
             // Two PIDs, not four: 1E33 / 1E34 each return the extreme cell's
             // voltage together with its index.
-            readCellExtreme(ObdPids.PID_CELL_VOLT_MIN_IDX, "min")?.let {
-                cellMinIdx = it.index; cellMinMv = it.millivolts
-            }
-            readCellExtreme(ObdPids.PID_CELL_VOLT_MAX_IDX, "max")?.let {
-                cellMaxIdx = it.index; cellMaxMv = it.millivolts
-            }
+            cellMinR = read(ObdPids.PID_CELL_VOLT_MIN_IDX, ObdPids.ECU_BMS) { ObdPids.parseCellExtreme(it) }
+            cellMaxR = read(ObdPids.PID_CELL_VOLT_MAX_IDX, ObdPids.ECU_BMS) { ObdPids.parseCellExtreme(it) }
 
-            // MEC / EC / 12V — try the EM module first (CSV-documented host),
-            // fall back to the BMS itself if EM is silent. The 2026-06-21
-            // field session showed EM 0x10 mute on this car; BMS may still
-            // know if the original handoff was right after all.
+            // MEC / EC / 12V — EM first (CSV-documented host), then BMS/BREG.
+            // None has ever answered on this Born; after MUTE_ENERGY_DIDS_AFTER
+            // all-silent slow ticks they're skipped and report NOT_SUPPORTED.
             if (energyDidMisses < MUTE_ENERGY_DIDS_AFTER) {
-                val mec = queryAnyEnergy(ObdPids.PID_MEC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
-                    ObdPids.ECU_BATTERY_REG)
-                val ec = queryAnyEnergy(ObdPids.PID_EC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
-                    ObdPids.ECU_BATTERY_REG)
-                val v12 = queryOn(ObdPids.PID_12V_VIA_EM, ObdPids.ECU_EM)
-                    ?.let { ObdPids.parse12vVoltageEm(it) }
-                mecKwh = mec ?: mecKwh
-                ecKwh = ec ?: ecKwh
-                volt12v = v12 ?: volt12v
-                if (mec == null && ec == null && v12 == null) {
+                mecR = readFirstOk(ObdPids.PID_MEC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
+                    ObdPids.ECU_BATTERY_REG) { ObdPids.parseEnergyKwh(it) }
+                ecR = readFirstOk(ObdPids.PID_EC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
+                    ObdPids.ECU_BATTERY_REG) { ObdPids.parseEnergyKwh(it) }
+                v12R = read(ObdPids.PID_12V_VIA_EM, ObdPids.ECU_EM) { ObdPids.parse12vVoltageEm(it) }
+                if (!mecR.isOk && !ecR.isOk && !v12R.isOk) {
                     energyDidMisses++
                     if (energyDidMisses == MUTE_ENERGY_DIDS_AFTER) {
                         capture.event("MEC/EC/12V EM muets ${MUTE_ENERGY_DIDS_AFTER}× — plus interrogés jusqu'à la reconnexion")
@@ -527,16 +566,52 @@ class ObdSessionController(private val application: Application) {
                 } else {
                     energyDidMisses = 0
                 }
+            } else {
+                val why = "muet ${MUTE_ENERGY_DIDS_AFTER}× cette session"
+                mecR = mecR.heldOr(Reading.notSupported(now, why))
+                ecR = ecR.heldOr(Reading.notSupported(now, why))
+                v12R = v12R.heldOr(Reading.notSupported(now, why))
             }
             // Lifetime cumulative energy — confirmed working on the BMS.
-            queryOn(ObdPids.PID_LIFETIME_ENERGY, ObdPids.ECU_BMS)?.let {
-                val (charged, discharged) = ObdPids.parseLifetimeEnergy(it)
-                if (charged != null) lifetimeChargeKwh = charged
-                if (discharged != null) lifetimeDischargeKwh = discharged
-                // Only on a fresh read — see LifetimeCounterCapacity.
-                counterCapacity.feed(now, socDisplay, charged, vehicleMode)
+            val freshLifetime = read(ObdPids.PID_LIFETIME_ENERGY, ObdPids.ECU_BMS, PidPolicy.MULTI_FRAME) {
+                ObdPids.parseLifetimeEnergy(it).takeIf { (c, d) -> c != null || d != null }
             }
+            // Only on a fresh read — see LifetimeCounterCapacity.
+            if (freshLifetime.isOk) {
+                counterCapacity.feed(now, socDisplay, freshLifetime.value?.first, vehicleMode)
+            }
+            lifetimeR = freshLifetime
         }
+
+        val coolantIn = coolantR.value?.first
+        val coolantOut = coolantR.value?.second
+        val cellMinMv = cellMinR.value?.millivolts
+        val cellMaxMv = cellMaxR.value?.millivolts
+        val cellMinIdx = cellMinR.value?.index
+        val cellMaxIdx = cellMaxR.value?.index
+        val mecKwh = mecR.value
+        val ecKwh = ecR.value
+        val volt12v = v12R.value
+        // Counters only ever grow: a failed read keeps the last known totals.
+        val lifetimeChargeKwh = lifetimeR.value?.first ?: previous.lifetimeChargeKwh
+        val lifetimeDischargeKwh = lifetimeR.value?.second ?: previous.lifetimeDischargeKwh
+
+        val readings: Map<Signal, Reading<*>> = mapOf(
+            Signal.T_MAX to tMaxR,
+            Signal.T_MIN to tMinR,
+            Signal.SOC_BMS to socBmsR,
+            Signal.V_HV to voltageR,
+            Signal.I_HV to currentR,
+            Signal.MODE to modeR,
+            Signal.PUMP to pumpR,
+            Signal.COOLANT to coolantR,
+            Signal.CELL_MIN to cellMinR,
+            Signal.CELL_MAX to cellMaxR,
+            Signal.MEC to mecR,
+            Signal.EC to ecR,
+            Signal.V_12 to v12R,
+            Signal.LIFETIME_ENERGY to lifetimeR,
+        )
 
         // ── Derived ──────────────────────────────────────────────────────────
         val powerKw = if (voltage != null && currentNow != null)
@@ -674,6 +749,7 @@ class ObdSessionController(private val application: Application) {
             vehicleMode = vehicleMode,
             volt12v = volt12v,
             chargeState = chargeState,
+            readings = readings,
             timestamp = now
         )
 

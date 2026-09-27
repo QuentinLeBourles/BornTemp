@@ -1,5 +1,6 @@
 package com.borntemp.app.screens
 
+import com.borntemp.app.viewmodel.AcquisitionSetting
 import android.bluetooth.BluetoothDevice
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -56,6 +57,7 @@ fun CockpitScreen(
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
     onPollingIntervalChange: (Long) -> Unit,
+    onAcquisitionSettingChange: (AcquisitionSetting) -> Unit,
     onAbrpEnabledChange: (Boolean) -> Unit,
     onAbrpApiKeyChange: (String) -> Unit,
     onAbrpUserTokenChange: (String) -> Unit,
@@ -104,6 +106,7 @@ fun CockpitScreen(
                 onOpenTrend = onOpenTrend,
                 onOpenErrorDetail = onOpenErrorDetail,
                 onPollingIntervalChange = onPollingIntervalChange,
+                onAcquisitionSettingChange = onAcquisitionSettingChange,
                 onAbrpEnabledChange = onAbrpEnabledChange,
                 onAbrpApiKeyChange = onAbrpApiKeyChange,
                 onAbrpUserTokenChange = onAbrpUserTokenChange,
@@ -123,6 +126,7 @@ fun CockpitScreen(
                 onOpenTrend = onOpenTrend,
                 onOpenErrorDetail = onOpenErrorDetail,
                 onPollingIntervalChange = onPollingIntervalChange,
+                onAcquisitionSettingChange = onAcquisitionSettingChange,
                 onAbrpEnabledChange = onAbrpEnabledChange,
                 onAbrpApiKeyChange = onAbrpApiKeyChange,
                 onAbrpUserTokenChange = onAbrpUserTokenChange,

@@ -1,5 +1,6 @@
 package com.borntemp.app
 
+import com.borntemp.app.viewmodel.AcquisitionSetting
 import android.app.Activity
 import android.bluetooth.BluetoothDevice
 import android.view.WindowManager
@@ -40,6 +41,7 @@ fun MainScreen(
     onDisconnect: () -> Unit,
     onRefresh: () -> Unit,
     onPollingIntervalChange: (Long) -> Unit,
+    onAcquisitionSettingChange: (AcquisitionSetting) -> Unit,
     onAbrpEnabledChange: (Boolean) -> Unit,
     onAbrpApiKeyChange: (String) -> Unit,
     onAbrpUserTokenChange: (String) -> Unit,
@@ -86,6 +88,7 @@ fun MainScreen(
             onDisconnect = onDisconnect,
             onRefresh = onRefresh,
             onPollingIntervalChange = onPollingIntervalChange,
+            onAcquisitionSettingChange = onAcquisitionSettingChange,
             onAbrpEnabledChange = onAbrpEnabledChange,
             onAbrpApiKeyChange = onAbrpApiKeyChange,
             onAbrpUserTokenChange = onAbrpUserTokenChange,
