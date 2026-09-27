@@ -22,10 +22,11 @@ import com.borntemp.app.ui.theme.CupraCobre
 import com.borntemp.app.ui.theme.CupraSheen
 import com.borntemp.app.ui.theme.Radius
 
-/** The 3 sibling sections of the cockpit — flat tabs, no back stack. */
+/** The 4 sibling sections of the cockpit — flat tabs, no back stack. */
 enum class CockpitTab(val label: String) {
     LIVE("LIVE"),
     SANTE("SANTÉ"),
+    HISTO("HISTO"),
     REGLAGES("RÉGLAGES")
 }
 
