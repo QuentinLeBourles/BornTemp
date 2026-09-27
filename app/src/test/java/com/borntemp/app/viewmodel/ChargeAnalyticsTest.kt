@@ -249,4 +249,52 @@ class ChargeAnalyticsTest {
         )
         assertEquals(SohConfidence.UNAVAILABLE, nothing)
     }
+
+    // ── LifetimeCounterCapacity ────────────────────────────────────────────
+
+    private val dc = ObdPids.VehicleMode.CHARGING_DC
+
+    @Test
+    fun `counter capacity matches the 2026-09-26 DC charge`() {
+        // 1E32 charge counter and HMI SOC from the capture's slow ticks,
+        // 11:20:33 → 11:37:56 (BMS 30.0 → 64.8 %).
+        val est = LifetimeCounterCapacity()
+        est.feed(0L, ObdPids.bmsSocToDisplay(30.0f), 0x0443EC56 / 8583.07f, dc)
+        est.feed(1L, ObdPids.bmsSocToDisplay(64.8f), 0x0447912A / 8583.07f, dc)
+        val r = est.lastResult()
+        assertNotNull(r)
+        // ~27.8 kWh over ~38.6 HMI points → ~72 kWh, SOH ~94 % against LG 77.
+        assertEquals(72.1f, r!!.apparentCapacityKwh, 1.0f)
+        assertEquals(1L, r.timestampMs)
+    }
+
+    @Test
+    fun `counter capacity needs a wide enough charge`() {
+        val est = LifetimeCounterCapacity()
+        est.feed(0L, 40f, 8000f, dc)
+        est.feed(1L, 50f, 8007.2f, dc)   // 10 points — too narrow to trust
+        assertNull(est.lastResult())
+        est.feed(2L, 56f, 8011.5f, dc)   // 16 points
+        assertEquals(71.9f, est.lastResult()!!.apparentCapacityKwh, 0.5f)
+    }
+
+    @Test
+    fun `counter capacity re-anchors when the charge stops`() {
+        val est = LifetimeCounterCapacity()
+        est.feed(0L, 20f, 8000f, dc)
+        est.feed(1L, 25f, 8003.6f, ObdPids.VehicleMode.DRIVING)
+        // A new charge must not pair with the previous one's anchor.
+        est.feed(2L, 30f, 8010f, dc)
+        est.feed(3L, 40f, 8017.2f, dc)
+        assertNull(est.lastResult())
+    }
+
+    @Test
+    fun `counter capacity rejects implausible and missing readings`() {
+        val est = LifetimeCounterCapacity()
+        est.feed(0L, 30f, 8000f, dc)
+        est.feed(1L, 50f, null, dc)
+        est.feed(2L, 50f, 8001f, dc)     // 5 kWh / 100 % — corrupt frame
+        assertNull(est.lastResult())
+    }
 }

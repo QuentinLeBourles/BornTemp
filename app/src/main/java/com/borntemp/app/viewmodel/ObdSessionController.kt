@@ -45,6 +45,12 @@ class ObdSessionController(private val application: Application) {
     /** Last unmapped 7448 frame already traced, so the diagnostic fires once
      *  per distinct value instead of on every poll. */
     private var lastUnknownModeRaw: String? = null
+    private val counterCapacity = LifetimeCounterCapacity()
+    /** Consecutive slow ticks where MEC, EC and 12V-via-EM all failed. Past
+     *  [MUTE_ENERGY_DIDS_AFTER] they're skipped for the rest of the connection:
+     *  on this Born EM answers NO DATA after a ~1 s timeout and BMS/BREG reply
+     *  7F 22 31, which cost ~3.5 s every slow tick in every capture so far. */
+    private var energyDidMisses = 0
 
     private val abrpSettings = AbrpSettings(application)
     private val abrpClient = AbrpTelemetryClient()
@@ -87,6 +93,8 @@ class ObdSessionController(private val application: Application) {
         private const val SOH_CSV_MIN_INTERVAL_MS = 30_000L
 
         private const val DEBUG_RAW_RESPONSES = true
+
+        private const val MUTE_ENERGY_DIDS_AFTER = 3
     }
 
     // Wraps sendCommand so every PID query's raw response is recorded:
@@ -358,6 +366,7 @@ class ObdSessionController(private val application: Application) {
         stopPolling()
         obdManager.disconnect()
         analytics.reset()
+        counterCapacity.reset()
         _uiState.update { it.copy(
             connectionState = ConnectionState.DISCONNECTED,
             batteryData = BatteryData(),
@@ -376,6 +385,7 @@ class ObdSessionController(private val application: Application) {
     private fun startPolling() {
         pollingJob?.cancel()
         pollCounter = 0L
+        energyDidMisses = 0
         pollingJob = scope.launch {
             _uiState.update { it.copy(isPolling = true) }
             while (isActive && obdManager.isConnected) {
@@ -414,8 +424,13 @@ class ObdSessionController(private val application: Application) {
         val pollMs = _uiState.value.pollingIntervalMs
 
         // ── BMS fast block ────────────────────────────────────────────────
-        val packTempMax = queryOn(ObdPids.PID_PACK_TEMP_MAX, ObdPids.ECU_BMS)
+        // First request of the tick: after ~40 min the BMS starts dropping it
+        // with NO DATA (168 of 750 on 2026-09-26 19:13, never another PID), and
+        // an immediate second try answers. One retry, only for this one.
+        val packTempMax = (queryOn(ObdPids.PID_PACK_TEMP_MAX, ObdPids.ECU_BMS)
             ?.let { ObdPids.parsePackTemp(it) }
+            ?: queryOn(ObdPids.PID_PACK_TEMP_MAX, ObdPids.ECU_BMS)
+                ?.let { ObdPids.parsePackTemp(it) })
         val packTempMin = queryOn(ObdPids.PID_PACK_TEMP_MIN, ObdPids.ECU_BMS)
             ?.let { ObdPids.parsePackTemp(it) }
         val socBms = queryOn(ObdPids.PID_SOC_BMS, ObdPids.ECU_BMS)
@@ -480,18 +495,33 @@ class ObdSessionController(private val application: Application) {
             // fall back to the BMS itself if EM is silent. The 2026-06-21
             // field session showed EM 0x10 mute on this car; BMS may still
             // know if the original handoff was right after all.
-            mecKwh = queryAnyEnergy(ObdPids.PID_MEC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
-                ObdPids.ECU_BATTERY_REG) ?: mecKwh
-            ecKwh = queryAnyEnergy(ObdPids.PID_EC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
-                ObdPids.ECU_BATTERY_REG) ?: ecKwh
+            if (energyDidMisses < MUTE_ENERGY_DIDS_AFTER) {
+                val mec = queryAnyEnergy(ObdPids.PID_MEC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
+                    ObdPids.ECU_BATTERY_REG)
+                val ec = queryAnyEnergy(ObdPids.PID_EC, ObdPids.ECU_EM, ObdPids.ECU_BMS,
+                    ObdPids.ECU_BATTERY_REG)
+                val v12 = queryOn(ObdPids.PID_12V_VIA_EM, ObdPids.ECU_EM)
+                    ?.let { ObdPids.parse12vVoltageEm(it) }
+                mecKwh = mec ?: mecKwh
+                ecKwh = ec ?: ecKwh
+                volt12v = v12 ?: volt12v
+                if (mec == null && ec == null && v12 == null) {
+                    energyDidMisses++
+                    if (energyDidMisses == MUTE_ENERGY_DIDS_AFTER) {
+                        capture.event("MEC/EC/12V EM muets ${MUTE_ENERGY_DIDS_AFTER}× — plus interrogés jusqu'à la reconnexion")
+                    }
+                } else {
+                    energyDidMisses = 0
+                }
+            }
             // Lifetime cumulative energy — confirmed working on the BMS.
             queryOn(ObdPids.PID_LIFETIME_ENERGY, ObdPids.ECU_BMS)?.let {
                 val (charged, discharged) = ObdPids.parseLifetimeEnergy(it)
                 if (charged != null) lifetimeChargeKwh = charged
                 if (discharged != null) lifetimeDischargeKwh = discharged
+                // Only on a fresh read — see LifetimeCounterCapacity.
+                counterCapacity.feed(now, socDisplay, charged, vehicleMode)
             }
-            queryOn(ObdPids.PID_12V_VIA_EM, ObdPids.ECU_EM)
-                ?.let { ObdPids.parse12vVoltageEm(it) }?.let { volt12v = it }
         }
 
         // ── Derived ──────────────────────────────────────────────────────────
@@ -556,7 +586,14 @@ class ObdSessionController(private val application: Application) {
         val overrideChoice = _uiState.value.packTypeOverride
         val packType = overrideChoice.packType ?: guessPackType(mecKwh)
         val capacityOrig = referenceCapacityKwh(packType)
-        val integratedKwh = analytics.energyIntegrator().lastResult()?.apparentCapacityKwh
+        // Measured capacity, best source first: the lifetime counter (works on
+        // this car), the power integrator (needs pack current, currently null),
+        // then the last measurement persisted from an earlier session.
+        val measured = counterCapacity.lastResult() ?: analytics.energyIntegrator().lastResult()
+        if (measured != null && measured.timestampMs == now) {
+            batterySettings.measuredCapacityKwh = measured.apparentCapacityKwh
+        }
+        val integratedKwh = measured?.apparentCapacityKwh ?: batterySettings.measuredCapacityKwh
         // Real MEC wins the day it answers; until then the integrated capacity
         // is the only honest numerator we have for SOH.
         val effectiveCapacity = mecKwh ?: integratedKwh
@@ -660,7 +697,7 @@ class ObdSessionController(private val application: Application) {
             pumpPct = pumpPct,
         )
 
-        analytics.energyIntegrator().lastResult()?.let { r ->
+        measured?.let { r ->
             // Cross-check log line: keeps a paper trail when the integrator
             // sees a complete mid-range pass, so we can sanity-check the
             // MEC reading against integrated energy in the .log file.

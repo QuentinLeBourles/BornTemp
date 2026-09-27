@@ -108,10 +108,16 @@ L'init configure le flow-control 29 bits (`ATFCSH` / `STCFCPA`) sur le BMS, et
 > - **capacité de référence** — override utilisateur, sinon la déduction MEC, sinon
 >   les 77 kWh que l'estimateur de charge suppose déjà. Sert d'échelle (SOH %, ETA),
 >   jamais de mesure.
-> - **capacité mesurée** — `apparentCapacityKwh` de `ChargeEnergyIntegrator`, intégré
->   sur une passe de charge 30→70 % de SOC. C'est la seule vraie mesure disponible
->   sur cette voiture ; le SOH la reporte en confiance **INDICATIF**, et reste à `--`
->   tant qu'aucune charge qualifiante n'a eu lieu.
+> - **capacité mesurée** — en priorité `LifetimeCounterCapacity` : ΔkWh du compteur
+>   de charge `1E32` ÷ ΔSOC HMI sur une charge d'au moins 15 points. Ne dépend pas du
+>   courant. Cinq charges DC (2026-08-12 → 09-26) donnent 79,5–82,8 kWh par 100 % de
+>   SOC BMS, soit ~72 kWh par 100 % HMI → **SOH ≈ 94 %** vs LG 77 kWh. En repli,
+>   `ChargeEnergyIntegrator` (inactif tant que le courant est `null`), puis la dernière
+>   mesure persistée (`BatterySettings.measuredCapacityKwh`). Confiance **INDICATIF** ;
+>   `--` tant qu'aucune charge n'a été mesurée.
+>
+> MEC, EC et 12V EM ne sont plus interrogés après 3 ticks lents muets consécutifs
+> (≈ 3,5 s gagnées par tick lent) ; ils restent sondés à chaque connexion.
 
 ---
 

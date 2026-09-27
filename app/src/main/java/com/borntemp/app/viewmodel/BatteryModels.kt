@@ -144,8 +144,9 @@ fun referenceCapacityKwh(packType: PackType): Float =
 
 /**
  * Confidence for a SOH figure, tagged by where its capacity came from: a real
- * MEC reading (graded by [classifySohConfidence]), else the charge integrator's
- * measured mid-range pass, else nothing to report.
+ * MEC reading (graded by [classifySohConfidence]), else a capacity measured over
+ * a charge (lifetime counter or power integrator, possibly persisted from an
+ * earlier session), else nothing to report.
  */
 fun classifyCapacityProvenance(
     mecKwh: Float?,
@@ -156,9 +157,9 @@ fun classifyCapacityProvenance(
 ): Pair<SohConfidence, String?> = when {
     mecKwh != null -> classifySohConfidence(mecKwh, tempAvg, socBms, mode)
     integratedKwh != null ->
-        SohConfidence.INDICATIVE to "capacité intégrée sur une passe 30–70 % de SOC"
+        SohConfidence.INDICATIVE to "capacité mesurée sur une charge (compteur BMS)"
     else ->
-        SohConfidence.UNAVAILABLE to "MEC absent, aucune passe de charge 30–70 %"
+        SohConfidence.UNAVAILABLE to "MEC absent, aucune charge de 15 % ou plus mesurée"
 }
 
 enum class ConnectionState {
