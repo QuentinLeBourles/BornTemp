@@ -10,6 +10,8 @@ import com.borntemp.app.abrp.AbrpSettings
 import com.borntemp.app.abrp.AbrpTelemetryClient
 import com.borntemp.app.abrp.LocationProvider
 import com.borntemp.app.obd.BluetoothObdManager
+import com.borntemp.app.domain.classifyUdsResponse
+import com.borntemp.app.domain.udsTxFrame
 import com.borntemp.app.obd.ChargeSessionLogger
 import com.borntemp.app.obd.MonitoredDeviceStore
 import com.borntemp.app.obd.ObdBeaconReceiver
@@ -70,6 +72,18 @@ class ObdSessionController(private val application: Application) {
             )
         }
         if (abrpSettings.enabled) locationProvider.start()
+        // Phase-1 UDS trace: every adapter exchange, classified, to its own file.
+        obdManager.exchangeListener = BluetoothObdManager.ExchangeListener { ecu, command, response, latencyMs ->
+            capture.uds(
+                timestampMs = System.currentTimeMillis(),
+                ecu = ecu?.name,
+                command = command,
+                txFrame = udsTxFrame(ecu?.fullRequestId ?: ObdPids.ECU_BMS.fullRequestId, command),
+                response = response,
+                latencyMs = latencyMs,
+                result = classifyUdsResponse(command, response),
+            )
+        }
     }
 
     fun setPackTypeOverride(override: PackTypeOverride) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import androidx.core.content.FileProvider
+import com.borntemp.app.domain.UdsResult
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -20,6 +21,10 @@ import java.util.Locale
  *   - `borntemp_<ts>.log`        — full per-frame trace (init/PID/event)
  *   - `borntemp_soh_<ts>.csv`    — one row per "reliable" SOH sample,
  *                                  for trending across sessions in a sheet
+ *   - `borntemp_uds_<ts>.csv`    — one row per adapter exchange (ECU, DID,
+ *                                  CAN frame sent, raw reply, latency,
+ *                                  OK / NRC code / timeout): the debug trace,
+ *                                  kept apart from the measurement CSV
  *
  * Failures (no external storage, IO errors) are swallowed — capture must never
  * break OBD polling.
@@ -36,9 +41,24 @@ class SessionCapture(private val context: Context) {
     private var sohFile: File? = null
     private var sohWriter: BufferedWriter? = null
 
+    private var udsFile: File? = null
+    private var udsWriter: BufferedWriter? = null
+
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val nameFormat = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
     private val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+    private val isoMsFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+
+    companion object {
+        const val UDS_HEADER =
+            "iso_time,unix_ms,ecu,command,tx_frame,rx_raw,latency_ms,status,nrc,detail\n"
+
+        /** RFC 4180 quoting — multi-frame replies carry spaces, and a stray
+         *  comma from a garbled ELM line must not shift the columns. */
+        fun csvCell(v: String): String =
+            if (v.any { it == ',' || it == '"' || it == '\n' }) "\"" + v.replace("\"", "\"\"") + "\""
+            else v
+    }
 
     /**
      * Open a fresh capture file under getExternalFilesDir/Download/ and write
@@ -62,6 +82,7 @@ class SessionCapture(private val context: Context) {
             file = target
             writer = w
             startSoh(base, stamp)
+            startUds(base, stamp)
             target
         } catch (_: Exception) {
             file = null
@@ -87,6 +108,51 @@ class SessionCapture(private val context: Context) {
             sohFile = null
             sohWriter = null
         }
+    }
+
+    private fun startUds(base: File, stamp: String) {
+        val target = File(base, "borntemp_uds_$stamp.csv")
+        try {
+            val w = BufferedWriter(FileWriter(target, /* append = */ false))
+            w.write(UDS_HEADER)
+            w.flush()
+            udsFile = target
+            udsWriter = w
+        } catch (_: Exception) {
+            udsFile = null
+            udsWriter = null
+        }
+    }
+
+    /** Append one exchange to the UDS trace. Flushed per row: the trace is
+     *  most useful exactly when a session ends badly. Synchronized: the
+     *  transport calls it from whichever coroutine issued the command. */
+    @Synchronized
+    fun uds(
+        timestampMs: Long,
+        ecu: String?,
+        command: String,
+        txFrame: String,
+        response: String?,
+        latencyMs: Long,
+        result: UdsResult,
+    ) {
+        val w = udsWriter ?: return
+        val row = listOf(
+            isoMsFormat.format(Date(timestampMs)),
+            timestampMs.toString(),
+            ecu.orEmpty(),
+            command,
+            txFrame,
+            response?.replace("\r".toRegex(), " ")?.replace(">", "")?.trim().orEmpty(),
+            latencyMs.toString(),
+            result.status.name,
+            result.nrc?.let { "%02X".format(it) }.orEmpty(),
+            result.detail.orEmpty(),
+        ).joinToString(",") { csvCell(it) }
+        try {
+            w.write(row); w.write("\n"); w.flush()
+        } catch (_: Exception) { /* fail open */ }
     }
 
     fun init(cmd: String, response: String?) {
@@ -179,6 +245,10 @@ class SessionCapture(private val context: Context) {
             try { w.flush(); w.close() } catch (_: Exception) { /* fail open */ }
         }
         sohWriter = null
+        udsWriter?.let { w ->
+            try { w.flush(); w.close() } catch (_: Exception) { /* fail open */ }
+        }
+        udsWriter = null
     }
 
     private fun uriFor(f: File?): Uri? {

@@ -252,6 +252,16 @@ class BluetoothObdManager(private val context: Context) {
 
     // ── Command execution ───────────────────────────────────────────────────
 
+    /** One command/reply round-trip on the adapter, as observed by [sendRaw]. */
+    fun interface ExchangeListener {
+        /** [ecu] is the live target when the command was written (null before
+         *  init); [response] is null on adapter timeout or write failure. */
+        fun onExchange(ecu: ObdPids.EcuTarget?, command: String, response: String?, latencyMs: Long)
+    }
+
+    /** Receives every exchange, AT commands included, for the UDS trace. */
+    @Volatile var exchangeListener: ExchangeListener? = null
+
     /**
      * Send an AT or OBD command and wait for the '>' prompt.
      * If [header] differs from the last one set, send ATSH<header> first.
@@ -273,22 +283,38 @@ class BluetoothObdManager(private val context: Context) {
      * to module 0x10 (energy mgmt, MEC/EC/12V) without re-issuing them
      * causes every reply to be filtered out.
      */
-    suspend fun sendCommand(command: String, ecu: ObdPids.EcuTarget): String? =
+    suspend fun sendCommand(
+        command: String,
+        ecu: ObdPids.EcuTarget,
+        timeoutMs: Long = RESPONSE_TIMEOUT_MS,
+    ): String? =
         withContext(Dispatchers.IO) {
             if (currentEcu != ecu) {
-                for (c in ObdPids.ecuSwitchCommands(ecu)) sendRaw(c)
+                // Target first, so the trace attributes the switch commands to
+                // the ECU they're setting up.
                 currentEcu = ecu
                 currentHeader = ecu.requestHeader
+                for (c in ObdPids.ecuSwitchCommands(ecu)) sendRaw(c)
             }
-            sendRaw(command)
+            sendRaw(command, timeoutMs)
         }
 
-    private suspend fun sendRaw(command: String): String? = withContext(Dispatchers.IO) {
-        val g = gatt ?: return@withContext null
-        val wc = writeChar ?: return@withContext null
-        if (!connected) return@withContext null
+    private suspend fun sendRaw(
+        command: String,
+        timeoutMs: Long = RESPONSE_TIMEOUT_MS,
+    ): String? = withContext(Dispatchers.IO) {
+        val startNs = System.nanoTime()
+        val resp = sendRawUntraced(command, timeoutMs)
+        exchangeListener?.onExchange(currentEcu, command, resp, (System.nanoTime() - startNs) / 1_000_000)
+        resp
+    }
 
-        commandMutex.withLock {
+    private suspend fun sendRawUntraced(command: String, timeoutMs: Long): String? {
+        val g = gatt ?: return null
+        val wc = writeChar ?: return null
+        if (!connected) return null
+
+        return commandMutex.withLock {
             val respDef = CompletableDeferred<String>()
             synchronized(bufferLock) {
                 assembler.reset()
@@ -300,7 +326,7 @@ class BluetoothObdManager(private val context: Context) {
                 return@withLock null
             }
 
-            val resp = withTimeoutOrNull(RESPONSE_TIMEOUT_MS) { respDef.await() }
+            val resp = withTimeoutOrNull(timeoutMs) { respDef.await() }
             synchronized(bufferLock) { responseDeferred = null }
             resp?.takeIf { it.isNotEmpty() }?.trim()
         }
