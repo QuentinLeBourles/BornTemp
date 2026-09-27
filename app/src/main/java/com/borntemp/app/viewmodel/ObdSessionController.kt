@@ -15,7 +15,12 @@ import com.borntemp.app.domain.PollIntervals
 import com.borntemp.app.domain.ReadStatus
 import com.borntemp.app.domain.Reading
 import com.borntemp.app.domain.Signal
+import com.borntemp.app.domain.SessionSample
 import com.borntemp.app.domain.classifyUdsResponse
+import com.borntemp.app.domain.ratePerMin
+import com.borntemp.app.domain.resolvePower
+import com.borntemp.app.domain.summarizeSession
+import com.borntemp.app.domain.thermalMetrics
 import com.borntemp.app.domain.packAverageTemp
 import com.borntemp.app.domain.shouldWriteCsvRow
 import com.borntemp.app.domain.readingOf
@@ -63,6 +68,13 @@ class ObdSessionController(private val application: Application) {
      *  on this Born EM answers NO DATA after a ~1 s timeout and BMS/BREG reply
      *  7F 22 31, which cost ~3.5 s every slow tick in every capture so far. */
     private var energyDidMisses = 0
+
+    private data class RatePoint(val t: Long, val tMax: Float?, val socHmi: Float?)
+    /** Last [RATE_WINDOW_MS] of T max / SOC HMI for the dT/dt and dSOC/dt slopes. */
+    private val rateHistory = ArrayDeque<RatePoint>()
+    /** Samples of the current (or last) charge, for the Session tab. */
+    private val chargeSamples = mutableListOf<SessionSample>()
+    private var wasCharging = false
 
     private val abrpSettings = AbrpSettings(application)
     private val abrpClient = AbrpTelemetryClient()
@@ -117,6 +129,9 @@ class ObdSessionController(private val application: Application) {
         private const val DEBUG_RAW_RESPONSES = true
 
         private const val MUTE_ENERGY_DIDS_AFTER = 3
+
+        /** Sliding window for dT/dt and dSOC/dt: ≥ 2 BMS SOC steps at 50 kW. */
+        private const val RATE_WINDOW_MS = 120_000L
     }
 
     // Wraps sendCommand so every PID query's raw response is recorded:
@@ -422,6 +437,9 @@ class ObdSessionController(private val application: Application) {
         obdManager.disconnect()
         analytics.reset()
         counterCapacity.reset()
+        rateHistory.clear()
+        chargeSamples.clear()
+        wasCharging = false
         _uiState.update { it.copy(
             connectionState = ConnectionState.DISCONNECTED,
             batteryData = BatteryData(),
@@ -711,7 +729,30 @@ class ObdSessionController(private val application: Application) {
 
         // §7 bug #3 — Δ cellules computed app-side.
         val cellDelta = if (cellMinMv != null && cellMaxMv != null)
-            cellMaxMv!! - cellMinMv!! else null
+            cellMaxMv - cellMinMv else null
+
+        // ── Phase-4 derived metrics (domain, pure) ─────────────────────────
+        val isCharging = chargeState == ChargeState.AC_CHARGING ||
+                         chargeState == ChargeState.DC_CHARGING
+        rateHistory.addLast(RatePoint(now, packTempMax, socDisplay))
+        while (rateHistory.isNotEmpty() && rateHistory.first().t < now - RATE_WINDOW_MS) rateHistory.removeFirst()
+        val tMaxRate = ratePerMin(rateHistory.mapNotNull { p -> p.tMax?.let { p.t to it } }, RATE_WINDOW_MS)
+        val socRate = ratePerMin(rateHistory.mapNotNull { p -> p.socHmi?.let { p.t to it } }, RATE_WINDOW_MS)
+        // Energy per 100 % HMI SOC: the measured capacity, else the reference.
+        val power = resolvePower(voltage, effectiveCurrent, socRate, integratedKwh ?: capacityOrig)
+        val derived = DerivedSnapshot(
+            thermal = thermalMetrics(packTempMin, packTempMax, coolantIn, coolantOut),
+            tMaxRatePerMin = tMaxRate,
+            socRatePerMin = socRate,
+            power = power,
+        )
+        // Session tab: the current charge, or the last one once it ends.
+        if (isCharging) {
+            if (!wasCharging) chargeSamples.clear()
+            chargeSamples += SessionSample(now, socDisplay, packTempMin, packTempMax, coolantIn, coolantOut, power)
+        }
+        wasCharging = isCharging
+        val chargeSummary = summarizeSession(chargeSamples)
 
         val data = BatteryData(
             avgTemp = finalAvg,
@@ -748,6 +789,7 @@ class ObdSessionController(private val application: Application) {
             volt12v = volt12v,
             chargeState = chargeState,
             readings = readings,
+            derived = derived,
             timestamp = now
         )
 
@@ -764,8 +806,6 @@ class ObdSessionController(private val application: Application) {
         val avgPowerKw = analytics.avgPowerKw()
         val socSlope = analytics.socSlopePctPerMin()
         val tempSlope = analytics.tempSlopeCPerMin()
-        val isCharging = chargeState == ChargeState.AC_CHARGING ||
-                         chargeState == ChargeState.DC_CHARGING
         val projection = ChargeProjection(
             visible = isCharging,
             avgPowerKw = avgPowerKw,
@@ -802,6 +842,7 @@ class ObdSessionController(private val application: Application) {
             it.copy(
                 batteryData = data,
                 chargeProjection = projection,
+                chargeSummary = chargeSummary,
                 thermalTrajectory = trajectory
             )
         }
@@ -845,7 +886,8 @@ class ObdSessionController(private val application: Application) {
                 confidence = confidence.name,
                 voltageHv = voltage,
                 currentHv = effectiveCurrent,
-                powerKw = effectivePower,
+                powerKw = power?.kw,
+                powerSource = power?.source?.name,
                 volt12v = volt12v,
                 readings = readings,
             )

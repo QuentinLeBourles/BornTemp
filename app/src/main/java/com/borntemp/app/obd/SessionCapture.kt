@@ -121,7 +121,7 @@ class SessionCapture(private val context: Context) {
                     "v_hv_v,i_hv_a,p_kw," +
                     // Appended, never inserted: SohHistory reads by header
                     // name, and older files must keep parsing.
-                    "v_12v," + STATUS_COLUMNS.joinToString(",") { it.first } + "\n")
+                    "v_12v," + STATUS_COLUMNS.joinToString(",") { it.first } + ",p_kw_source\n")
             w.flush()
             sohFile = target
             sohWriter = w
@@ -210,6 +210,7 @@ class SessionCapture(private val context: Context) {
         currentHv: Float? = null,
         powerKw: Float? = null,
         volt12v: Float? = null,
+        powerSource: String? = null,
         readings: Map<Signal, Reading<*>> = emptyMap(),
     ) {
         val w = sohWriter ?: return
@@ -246,6 +247,9 @@ class SessionCapture(private val context: Context) {
             for ((_, signal) in STATUS_COLUMNS) {
                 append(','); append(statusCell(readings[signal]))
             }
+            // MEASURED (V×I) or ESTIMATED (SOC slope): p_kw is never
+            // presented as a measurement it isn't.
+            append(','); append(powerSource.orEmpty())
             append('\n')
         }
         try {
