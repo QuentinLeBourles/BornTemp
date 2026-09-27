@@ -18,6 +18,8 @@ import com.borntemp.app.domain.Signal
 import com.borntemp.app.domain.Cadence
 import com.borntemp.app.domain.CandidateTarget
 import com.borntemp.app.domain.SessionSample
+import com.borntemp.app.domain.abrpNextDelayMs
+import com.borntemp.app.domain.shouldLogAbrpFailure
 import com.borntemp.app.domain.SignalCandidates
 import com.borntemp.app.domain.classifyUdsResponse
 import com.borntemp.app.domain.ratePerMin
@@ -60,6 +62,7 @@ class ObdSessionController(private val application: Application) {
     )
     private val analytics = ChargeAnalytics()
     private var pollingJob: Job? = null
+    private var abrpJob: Job? = null
     private var pollCounter = 0L
     private var lastSohSampleMs = 0L
     /** Last unmapped 7448 frame already traced, so the diagnostic fires once
@@ -549,6 +552,7 @@ class ObdSessionController(private val application: Application) {
         pollingJob?.cancel()
         pollCounter = 0L
         energyDidMisses = 0
+        startAbrpLoop()
         pollingJob = scope.launch {
             _uiState.update { it.copy(isPolling = true) }
             while (isActive && obdManager.isConnected) {
@@ -576,6 +580,50 @@ class ObdSessionController(private val application: Application) {
     private fun stopPolling() {
         pollingJob?.cancel()
         pollingJob = null
+        abrpJob?.cancel()
+        abrpJob = null
+    }
+
+    /**
+     * ABRP telemetry at 1 Hz, decoupled from OBD polling. Inline at the end of
+     * each poll it went out every 5–10 s, and a slow network stalled polling
+     * for up to 16 s. Each send carries the latest BatteryData (refreshed at
+     * the poll rate) and a fresh GPS fix (refreshed every second).
+     */
+    private fun startAbrpLoop() {
+        abrpJob?.cancel()
+        abrpJob = scope.launch {
+            var previousOk: Boolean? = null
+            while (isActive && obdManager.isConnected) {
+                val started = System.currentTimeMillis()
+                val st = _uiState.value
+                val abrp = st.abrp
+                // Nothing to report before the first poll lands.
+                if (abrp.enabled && abrp.apiKey.isNotBlank() && abrp.userToken.isNotBlank() &&
+                    st.batteryData.timestamp > 0L) {
+                    val result = abrpClient.send(
+                        apiKey = abrp.apiKey,
+                        userToken = abrp.userToken,
+                        data = st.batteryData,
+                        location = locationProvider.snapshot()
+                    )
+                    _uiState.update { state ->
+                        state.copy(abrp = state.abrp.copy(
+                            lastSendOk = result.success,
+                            lastSendMessage = result.message,
+                            lastSendTimeMs = started
+                        ))
+                    }
+                    if (shouldLogAbrpFailure(previousOk, result.success)) {
+                        log("ABRP ✗ ${result.message}", LogLevel.WARN)
+                    } else if (result.success && previousOk == false) {
+                        log("ABRP rétabli", LogLevel.OK)
+                    }
+                    previousOk = result.success
+                }
+                delay(abrpNextDelayMs(System.currentTimeMillis() - started))
+            }
+        }
     }
 
     /** Flush capture files without closing them (Activity onStop, service
@@ -996,25 +1044,6 @@ class ObdSessionController(private val application: Application) {
             lastSohSampleMs = now
         }
 
-        // ── ABRP telemetry ─────────────────────────────────────────────────
-        val abrp = _uiState.value.abrp
-        if (abrp.enabled && abrp.apiKey.isNotBlank() && abrp.userToken.isNotBlank()) {
-            val result = abrpClient.send(
-                apiKey = abrp.apiKey,
-                userToken = abrp.userToken,
-                data = data,
-                location = locationProvider.snapshot()
-            )
-            _uiState.update { state ->
-                state.copy(abrp = state.abrp.copy(
-                    lastSendOk = result.success,
-                    lastSendMessage = result.message,
-                    lastSendTimeMs = now
-                ))
-            }
-            if (!result.success) {
-                log("ABRP ✗ ${result.message}", LogLevel.WARN)
-            }
-        }
+        // ABRP telemetry runs on its own 1 s loop — see startAbrpLoop().
     }
 }

@@ -24,8 +24,9 @@ class AbrpTelemetryClient {
 
     companion object {
         private const val ENDPOINT = "https://api.iternio.com/1/tlm/send"
-        private const val CONNECT_TIMEOUT_MS = 8_000
-        private const val READ_TIMEOUT_MS = 8_000
+        // Sent every second: a stuck request must give way to a fresher frame.
+        private const val CONNECT_TIMEOUT_MS = 3_000
+        private const val READ_TIMEOUT_MS = 3_000
     }
 
     data class Result(val success: Boolean, val message: String)

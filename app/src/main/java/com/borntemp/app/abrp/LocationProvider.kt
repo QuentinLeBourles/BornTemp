@@ -21,8 +21,10 @@ import androidx.core.content.ContextCompat
 class LocationProvider(private val context: Context) : LocationListener {
 
     companion object {
-        private const val MIN_INTERVAL_MS = 3_000L
-        private const val MIN_DISTANCE_M = 5f
+        // 1 Hz for ABRP's live tracking. No distance filter: with one, a
+        // stopped car kept reporting its last moving speed and never parked.
+        private const val MIN_INTERVAL_MS = 1_000L
+        private const val MIN_DISTANCE_M = 0f
     }
 
     private val manager: LocationManager? =
