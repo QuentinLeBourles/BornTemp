@@ -17,7 +17,16 @@ import com.borntemp.app.domain.Reading
 import com.borntemp.app.domain.Signal
 import com.borntemp.app.domain.Cadence
 import com.borntemp.app.domain.CandidateTarget
+import com.borntemp.app.data.HistoryStore
+import com.borntemp.app.domain.ConnectionRecord
+import com.borntemp.app.domain.CounterSnapshot
+import com.borntemp.app.domain.LastKnown
 import com.borntemp.app.domain.SessionSample
+import com.borntemp.app.domain.SessionSummary
+import com.borntemp.app.domain.chargeRecordOf
+import com.borntemp.app.domain.monthlyEnergy
+import com.borntemp.app.domain.parkedGaps
+import java.time.ZoneId
 import com.borntemp.app.domain.abrpNextDelayMs
 import com.borntemp.app.domain.shouldLogAbrpFailure
 import com.borntemp.app.domain.SignalCandidates
@@ -81,6 +90,17 @@ class ObdSessionController(private val application: Application) {
     /** Samples of the current (or last) charge, for the Session tab. */
     private val chargeSamples = mutableListOf<SessionSample>()
     private var wasCharging = false
+
+    // ── Offline history ────────────────────────────────────────────────────
+    private val history = HistoryStore(application.filesDir)
+    /** First counter read of this connection; the open record spans from it. */
+    private var connectionStart: CounterSnapshot? = null
+    /** Charge counter at the first fresh read of the current charge. */
+    private var chargeCounterStart: Float? = null
+    private var chargeCounterLatest: Float? = null
+    private var chargeTMaxPeak: Float? = null
+    private var chargeIsDc = false
+    private var lastKnownSavedMs = 0L
     /** Mode at the last candidate run; a change re-runs the scans. */
     private var lastCandidateMode: ObdPids.VehicleMode? = null
 
@@ -105,6 +125,7 @@ class ObdSessionController(private val application: Application) {
             )
         }
         if (abrpSettings.enabled) locationProvider.start()
+        refreshOfflineHistory()
         // Phase-1 UDS trace: every adapter exchange, classified, to its own file.
         obdManager.exchangeListener = BluetoothObdManager.ExchangeListener { ecu, command, response, latencyMs ->
             capture.uds(
@@ -138,6 +159,9 @@ class ObdSessionController(private val application: Application) {
         private const val DEBUG_RAW_RESPONSES = true
 
         private const val MUTE_ENERGY_DIDS_AFTER = 3
+
+        /** Last-known snapshot cadence: cheap, and bounds what a crash loses. */
+        private const val LAST_KNOWN_SAVE_MS = 30_000L
 
         /** Sliding window for dT/dt and dSOC/dt: ≥ 2 BMS SOC steps at 50 kW. */
         private const val RATE_WINDOW_MS = 120_000L
@@ -526,6 +550,7 @@ class ObdSessionController(private val application: Application) {
 
     fun disconnect() {
         stopPolling()
+        closeHistory()
         obdManager.disconnect()
         analytics.reset()
         counterCapacity.reset()
@@ -567,6 +592,7 @@ class ObdSessionController(private val application: Application) {
                 delay(currentPollIntervalMs())
             }
             if (!obdManager.isConnected) {
+                closeHistory()
                 log("Connexion perdue.", LogLevel.ERROR)
                 _uiState.update { it.copy(
                     connectionState = ConnectionState.ERROR,
@@ -623,6 +649,63 @@ class ObdSessionController(private val application: Application) {
                 }
                 delay(abrpNextDelayMs(System.currentTimeMillis() - started))
             }
+        }
+    }
+
+    // ── Offline history ────────────────────────────────────────────────────
+
+    private fun recordConnectionSnapshot(now: Long, socHmi: Float?, counters: Pair<Float?, Float?>?) {
+        val snap = CounterSnapshot(now, socHmi, counters?.first, counters?.second)
+        val start = connectionStart ?: snap.also { connectionStart = it }
+        history.updateOpenConnection(ConnectionRecord(start, snap))
+    }
+
+    private fun saveOpenCharge(summary: SessionSummary?) {
+        summary ?: return
+        history.updateOpenCharge(
+            chargeRecordOf(summary, chargeIsDc, chargeCounterStart, chargeCounterLatest, chargeTMaxPeak)
+        )
+    }
+
+    private fun saveLastKnown(d: BatteryData) {
+        if (d.timestamp == 0L) return
+        history.saveLastKnown(
+            LastKnown(
+                t = d.timestamp, socHmi = d.soc, socBms = d.socBms, tAvg = d.avgTemp,
+                tMin = d.cellTempMin, tMax = d.cellTempMax, volt12v = d.volt12v,
+                sohPct = d.sohPct, cellDeltaMv = d.cellVoltDeltaMv,
+                chargedKwh = d.lifetimeChargeKwh, dischargedKwh = d.lifetimeDischargeKwh,
+            )
+        )
+    }
+
+    /** End of connection: finalize the open records and the last-known state. */
+    private fun closeHistory() {
+        saveLastKnown(_uiState.value.batteryData)
+        if (wasCharging) {
+            saveOpenCharge(summarizeSession(chargeSamples))
+            history.closeCharge()
+            // Connection loss then the user's Disconnect both land here; the
+            // second call must not re-append the same charge.
+            wasCharging = false
+        }
+        history.closeConnection()
+        connectionStart = null
+        refreshOfflineHistory()
+    }
+
+    private fun refreshOfflineHistory() {
+        val connections = history.connections()
+        val snapshots = connections.flatMap { listOf(it.start, it.end) }
+        _uiState.update {
+            it.copy(
+                offline = OfflineHistory(
+                    lastKnown = history.lastKnown(),
+                    charges = history.charges().take(OfflineHistory.MAX_CHARGES),
+                    months = monthlyEnergy(snapshots, ZoneId.systemDefault()).reversed(),
+                    parked = parkedGaps(connections).reversed(),
+                )
+            )
         }
     }
 
@@ -739,6 +822,7 @@ class ObdSessionController(private val application: Application) {
             }
             // Only on a fresh read — see LifetimeCounterCapacity.
             if (freshLifetime.isOk) {
+                recordConnectionSnapshot(now, socDisplay, freshLifetime.value)
                 counterCapacity.feed(now, socDisplay, freshLifetime.value?.first, vehicleMode)
             }
             lifetimeR = freshLifetime
@@ -898,11 +982,31 @@ class ObdSessionController(private val application: Application) {
         )
         // Session tab: the current charge, or the last one once it ends.
         if (isCharging) {
-            if (!wasCharging) chargeSamples.clear()
+            if (!wasCharging) {
+                chargeSamples.clear()
+                chargeCounterStart = null
+                chargeCounterLatest = null
+                chargeTMaxPeak = null
+            }
+            chargeIsDc = chargeState == ChargeState.DC_CHARGING
             chargeSamples += SessionSample(now, socDisplay, packTempMin, packTempMax, coolantIn, coolantOut, power)
+            packTempMax?.let { t -> chargeTMaxPeak = maxOf(chargeTMaxPeak ?: t, t) }
+            if (isSlowTick && lifetimeR.isOk) {
+                lifetimeR.value?.first?.let { c ->
+                    if (chargeCounterStart == null) chargeCounterStart = c
+                    chargeCounterLatest = c
+                }
+            }
         }
+        val chargeEnded = wasCharging && !isCharging
         wasCharging = isCharging
         val chargeSummary = summarizeSession(chargeSamples)
+        if (isCharging && isSlowTick) saveOpenCharge(chargeSummary)
+        if (chargeEnded) {
+            saveOpenCharge(chargeSummary)
+            history.closeCharge()
+            refreshOfflineHistory()
+        }
 
         val data = BatteryData(
             avgTemp = finalAvg,
@@ -1042,6 +1146,11 @@ class ObdSessionController(private val application: Application) {
                 readings = readings,
             )
             lastSohSampleMs = now
+        }
+
+        if (now - lastKnownSavedMs >= LAST_KNOWN_SAVE_MS) {
+            saveLastKnown(data)
+            lastKnownSavedMs = now
         }
 
         // ABRP telemetry runs on its own 1 s loop — see startAbrpLoop().

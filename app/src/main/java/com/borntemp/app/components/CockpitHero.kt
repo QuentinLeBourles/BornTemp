@@ -40,10 +40,12 @@ fun CockpitHero(
     socHmi: Float?,
     sohPct: Float?,
     volt12v: Float?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Set when the values are last-known, not live: shown under the tiles. */
+    staleLabel: String? = null,
 ) {
+    Column(modifier = modifier) {
     Row(
-        modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -69,6 +71,30 @@ fun CockpitHero(
             CockpitTile12V(volt12v = volt12v)
         }
     }
+    staleLabel?.let {
+        Text(
+            it,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.5.sp,
+            color = AmberHi,
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
+    }
+}
+
+/** Wall clock that recomposes every [periodMs], for "il y a 3 h" labels. */
+@Composable
+fun rememberNowMs(periodMs: Long = 60_000L): Long {
+    val now = androidx.compose.runtime.produceState(System.currentTimeMillis()) {
+        while (true) {
+            kotlinx.coroutines.delay(periodMs)
+            value = System.currentTimeMillis()
+        }
+    }
+    return now.value
 }
 
 /** Pure model for the ring's fill/label/color — reused by the landscape layout. */

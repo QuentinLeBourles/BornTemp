@@ -1,5 +1,6 @@
 package com.borntemp.app.screens.cockpit
 
+import com.borntemp.app.components.rememberNowMs
 import com.borntemp.app.viewmodel.AcquisitionSetting
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -76,13 +77,28 @@ fun CockpitLandscapeLayout(
                 )
             }
 
+            val hero = heroSnapshot(
+
+                uiState.connectionState, uiState.batteryData, uiState.offline.lastKnown, rememberNowMs()
+
+            )
+
             CockpitHero(
-                tempAvg = uiState.batteryData.avgTemp,
+
+                tempAvg = hero.tempAvg,
+
                 tempSlopeCPerMin = uiState.thermalTrajectory.slopeCPerMin,
-                socHmi = uiState.batteryData.soc,
-                sohPct = uiState.batteryData.sohPct,
-                volt12v = uiState.batteryData.volt12v,
-                modifier = Modifier.padding(bottom = Spacing.md)
+
+                socHmi = hero.socHmi,
+
+                sohPct = hero.sohPct,
+
+                volt12v = hero.volt12v,
+
+                modifier = Modifier.padding(bottom = Spacing.md),
+
+                staleLabel = hero.staleLabel,
+
             )
 
             ChargeProjectionCard(
@@ -127,6 +143,7 @@ fun CockpitLandscapeLayout(
                         showChargeProjection = false
                     )
                     CockpitTab.SANTE -> CockpitHealthTab(uiState = uiState, onOpenTrend = onOpenTrend)
+                    CockpitTab.HISTO -> CockpitHistoryTab(uiState = uiState)
                     CockpitTab.REGLAGES -> CockpitReglagesTab(
                         uiState = uiState,
                         onPollingIntervalChange = onPollingIntervalChange,
