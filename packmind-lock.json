@@ -98,7 +98,7 @@
       "name": "oui",
       "type": "command",
       "id": "fee9fe29-d8cc-45da-90ee-18b449ce4dde",
-      "version": 3,
+      "version": 2,
       "spaceId": "3f68fb8d-13e0-4c77-9028-3618467eb46b",
       "packageIds": [
         "e05650d0-f235-4171-b1e8-c6a386c45969"
