@@ -4,10 +4,11 @@
     "@global/generic"
   ],
   "agents": [
+    "agents_md",
     "claude",
     "packmind"
   ],
-  "targetId": "356421f7-77b2-4128-92bc-62efa82edb11",
+  "targetId": "52804bcb-db41-4c91-ac17-188ce37aa0c9",
   "artifacts": {
     "user:command:adding-ai-agent-rendering-system": {
       "name": "Adding ai agent rendering system",
@@ -90,6 +91,115 @@
         {
           "path": ".packmind/commands/create-use-case.md",
           "agent": "packmind"
+        }
+      ]
+    },
+    "user:command:oui": {
+      "name": "oui",
+      "type": "command",
+      "id": "fee9fe29-d8cc-45da-90ee-18b449ce4dde",
+      "version": 2,
+      "spaceId": "3f68fb8d-13e0-4c77-9028-3618467eb46b",
+      "packageIds": [
+        "e05650d0-f235-4171-b1e8-c6a386c45969"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/commands/oui.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".packmind/commands/oui.md",
+          "agent": "packmind"
+        }
+      ]
+    },
+    "user:skill:adding-ai-agent-rendering-system": {
+      "name": "adding-ai-agent-rendering-system",
+      "type": "skill",
+      "id": "2ba207be-3068-425d-a587-85831d1fd3fa",
+      "version": 2,
+      "spaceId": "3f68fb8d-13e0-4c77-9028-3618467eb46b",
+      "packageIds": [
+        "e05650d0-f235-4171-b1e8-c6a386c45969"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/skills/adding-ai-agent-rendering-system/SKILL.md",
+          "agent": "claude",
+          "isSkillDefinition": true
+        }
+      ]
+    },
+    "user:skill:qa-review": {
+      "name": "qa-review",
+      "type": "skill",
+      "id": "66683714-46a5-45c1-b1af-e850ca285f80",
+      "version": 4,
+      "spaceId": "3f68fb8d-13e0-4c77-9028-3618467eb46b",
+      "packageIds": [
+        "e05650d0-f235-4171-b1e8-c6a386c45969"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/skills/qa-review/agents/code-map-agent.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".claude/skills/qa-review/agents/code-review-agent.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".claude/skills/qa-review/agents/functional-coverage-agent.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".claude/skills/qa-review/em_template.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".claude/skills/qa-review/SKILL.md",
+          "agent": "claude",
+          "isSkillDefinition": true
+        }
+      ]
+    },
+    "user:skill:sync-trigger-v6": {
+      "name": "sync-trigger-v6",
+      "type": "skill",
+      "id": "57aaa331-96da-4c59-962c-b92fbc7a3b11",
+      "version": 1,
+      "spaceId": "3f68fb8d-13e0-4c77-9028-3618467eb46b",
+      "packageIds": [
+        "e05650d0-f235-4171-b1e8-c6a386c45969"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/skills/sync-trigger-v6/SKILL.md",
+          "agent": "claude",
+          "isSkillDefinition": true
+        }
+      ]
+    },
+    "user:skill:sync-trigger-v7": {
+      "name": "sync-trigger-v7",
+      "type": "skill",
+      "id": "ad006341-4517-4074-977e-7490b5005567",
+      "version": 1,
+      "spaceId": "3f68fb8d-13e0-4c77-9028-3618467eb46b",
+      "packageIds": [
+        "e05650d0-f235-4171-b1e8-c6a386c45969"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/skills/sync-trigger-v7/SKILL.md",
+          "agent": "claude",
+          "isSkillDefinition": true
         }
       ]
     },
