@@ -1,0 +1,118 @@
+{
+  "lockfileVersion": 2,
+  "packageSlugs": [
+    "@global/generic"
+  ],
+  "agents": [
+    "claude",
+    "packmind"
+  ],
+  "targetId": "356421f7-77b2-4128-92bc-62efa82edb11",
+  "artifacts": {
+    "user:command:adding-ai-agent-rendering-system": {
+      "name": "Adding ai agent rendering system",
+      "type": "command",
+      "id": "839ba423-1716-4703-9c5e-332b24b34731",
+      "version": 5,
+      "spaceId": "9f473544-3a63-407e-a92a-564f07a5c3e7",
+      "packageIds": [
+        "6d5c8eb0-a4c1-4f6a-b0b5-41479db963b8"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/commands/adding-ai-agent-rendering-system.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".packmind/commands/adding-ai-agent-rendering-system.md",
+          "agent": "packmind"
+        }
+      ]
+    },
+    "user:command:create-new-package-in-monorepo": {
+      "name": "Create new package in monorepo",
+      "type": "command",
+      "id": "9ee0fc2c-7af4-4573-ab80-5b2a06058701",
+      "version": 1,
+      "spaceId": "9f473544-3a63-407e-a92a-564f07a5c3e7",
+      "packageIds": [
+        "6d5c8eb0-a4c1-4f6a-b0b5-41479db963b8"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/commands/create-new-package-in-monorepo.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".packmind/commands/create-new-package-in-monorepo.md",
+          "agent": "packmind"
+        }
+      ]
+    },
+    "user:command:create-or-update-model-and-typeorm-schemas": {
+      "name": "Create or update model and typeorm schemas",
+      "type": "command",
+      "id": "a2a1570e-dc80-4a67-bf84-9b37e9af4bec",
+      "version": 1,
+      "spaceId": "9f473544-3a63-407e-a92a-564f07a5c3e7",
+      "packageIds": [
+        "6d5c8eb0-a4c1-4f6a-b0b5-41479db963b8"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/commands/create-or-update-model-and-typeorm-schemas.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".packmind/commands/create-or-update-model-and-typeorm-schemas.md",
+          "agent": "packmind"
+        }
+      ]
+    },
+    "user:command:create-use-case": {
+      "name": "Create use case",
+      "type": "command",
+      "id": "1d55530a-2322-4734-a0ea-998bf45a74bd",
+      "version": 1,
+      "spaceId": "9f473544-3a63-407e-a92a-564f07a5c3e7",
+      "packageIds": [
+        "6d5c8eb0-a4c1-4f6a-b0b5-41479db963b8"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/commands/create-use-case.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".packmind/commands/create-use-case.md",
+          "agent": "packmind"
+        }
+      ]
+    },
+    "user:standard:testing-good-practices-1": {
+      "name": "Testing good practices 2",
+      "type": "standard",
+      "id": "2a329ed8-665a-4ff9-9c37-1e3bbd7d0de3",
+      "version": 2,
+      "spaceId": "9f473544-3a63-407e-a92a-564f07a5c3e7",
+      "packageIds": [
+        "6d5c8eb0-a4c1-4f6a-b0b5-41479db963b8"
+      ],
+      "source": "user",
+      "files": [
+        {
+          "path": ".claude/rules/packmind/standard-testing-good-practices-1.md",
+          "agent": "claude"
+        },
+        {
+          "path": ".packmind/standards/testing-good-practices-1.md",
+          "agent": "packmind"
+        }
+      ]
+    }
+  }
+}
